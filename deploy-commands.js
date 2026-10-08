@@ -27,7 +27,7 @@ const rest = new REST({ version: "10" })
     try {
         console.log("🔄 Mendaftarkan commands...");
 
-        await rest.put(
+        const deployPromise = rest.put(
             Routes.applicationGuildCommands(
                 process.env.CLIENT_ID,
                 process.env.GUILD_ID
@@ -37,8 +37,28 @@ const rest = new REST({ version: "10" })
             }
         );
 
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+                reject(
+                    new Error(
+                        "Discord API timeout setelah 15 detik."
+                    )
+                );
+            }, 15000);
+        });
+
+        const result = await Promise.race([
+            deployPromise,
+            timeoutPromise
+        ]);
+
+        console.log("📦 Hasil deploy:", result);
         console.log("✅ Commands berhasil didaftarkan!");
+
     } catch (error) {
+        console.error("❌ Gagal mendaftarkan commands:");
         console.error(error);
+
+        process.exitCode = 1;
     }
 })();
