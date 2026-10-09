@@ -2,10 +2,15 @@ require("dotenv").config();
 
 const {
     REST,
-    Routes
+    Routes,
+    ApplicationCommandOptionType
 } = require("discord.js");
 
 const commands = [
+    {
+        name: "join",
+        description: "Masuk ke Voice Channel tempatmu saat ini"
+    },
     {
         name: "help",
         description: "Lihat daftar command bot"
@@ -21,7 +26,7 @@ const commands = [
             {
                 name: "channel",
                 description: "Nama channel voice",
-                type: 3,
+                type: ApplicationCommandOptionType.String,
                 required: true
             }
         ]
@@ -33,13 +38,13 @@ const commands = [
             {
                 name: "user",
                 description: "User yang ingin disebut",
-                type: 6,
+                type: ApplicationCommandOptionType.User,
                 required: true
             },
             {
                 name: "text",
                 description: "Isi pesan yang ingin dikirim",
-                type: 3,
+                type: ApplicationCommandOptionType.String,
                 required: true
             }
         ]
@@ -58,11 +63,14 @@ const commands = [
     }
 ];
 
-const rest = new REST({ version: "10" })
-    .setToken(process.env.DISCORD_TOKEN);
+const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
 (async () => {
     try {
+        if (!process.env.CLIENT_ID || !process.env.GUILD_ID || !process.env.DISCORD_TOKEN) {
+            throw new Error("ENV belum lengkap. Harap isi DISCORD_TOKEN, CLIENT_ID, dan GUILD_ID di .env");
+        }
+
         console.log("🔄 Mendaftarkan commands...");
 
         const deployPromise = rest.put(
@@ -77,26 +85,17 @@ const rest = new REST({ version: "10" })
 
         const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => {
-                reject(
-                    new Error(
-                        "Discord API timeout setelah 15 detik."
-                    )
-                );
+                reject(new Error("Discord API timeout setelah 15 detik."));
             }, 15000);
         });
 
-        const result = await Promise.race([
-            deployPromise,
-            timeoutPromise
-        ]);
+        const result = await Promise.race([deployPromise, timeoutPromise]);
 
         console.log("📦 Hasil deploy:", result);
         console.log("✅ Commands berhasil didaftarkan!");
-
     } catch (error) {
         console.error("❌ Gagal mendaftarkan commands:");
         console.error(error);
-
         process.exitCode = 1;
     }
 })();
