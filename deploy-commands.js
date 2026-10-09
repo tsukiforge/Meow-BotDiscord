@@ -7,16 +7,54 @@ const {
 
 const commands = [
     {
-        name: "join",
-        description: "Meow~ masuk ke Voice Channel kamu"
+        name: "help",
+        description: "Lihat daftar command bot"
     },
     {
-        name: "leave",
-        description: "Meow~ keluar dari Voice Channel"
+        name: "ping",
+        description: "Cek respon bot"
+    },
+    {
+        name: "move",
+        description: "Pindahkan bot ke channel voice tertentu",
+        options: [
+            {
+                name: "channel",
+                description: "Nama channel voice",
+                type: 3,
+                required: true
+            }
+        ]
+    },
+    {
+        name: "say",
+        description: "Mention user dan kirim text tertentu",
+        options: [
+            {
+                name: "user",
+                description: "User yang ingin disebut",
+                type: 6,
+                required: true
+            },
+            {
+                name: "text",
+                description: "Isi pesan yang ingin dikirim",
+                type: 3,
+                required: true
+            }
+        ]
+    },
+    {
+        name: "about",
+        description: "Lihat info bot, developer, dan repo"
     },
     {
         name: "status",
-        description: "Melihat status Meow~"
+        description: "Cek channel bot saat ini"
+    },
+    {
+        name: "leave",
+        description: "Keluar dari Voice Channel"
     }
 ];
 
