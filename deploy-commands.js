@@ -60,7 +60,20 @@ const commands = [
     {
         name: "leave",
         description: "Keluar dari Voice Channel"
-    }
+    },
+     {
+        name: "game",
+        description: "Buat room game baru atau join room yang sudah ada",
+        options: [
+            {
+                name: "code",
+                description: "Kode room yang ingin di-join",
+                type: ApplicationCommandOptionType.String,
+                required: false
+            }
+        ]
+
+    },
 ];
 
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);

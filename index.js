@@ -10,16 +10,15 @@ const {
 const {
     joinVoiceChannel,
     getVoiceConnection,
-    VoiceConnectionStatus,
-    entersState
+    VoiceConnectionStatus
 } = require("@discordjs/voice");
 
 const BOT_NAME = "MeowBot";
 const DEVELOPER_NAME = "tsukiforge";
 const REPO_URL = "https://github.com/tsukiforge/Meow-BotDiscord";
 const ABOUT_TEXT = "MeowBot adalah bot Discord ringan yang dibuat untuk membantu server dengan fitur sederhana, friendly, dan mudah digunakan.";
-const MAX_RECONNECT_ATTEMPTS = 3;
-const RECONNECT_DELAY_MS = 2000;
+const MAX_GAME_ROOM_PLAYERS = 6;
+const gameRooms = new Map();
 
 const client = new Client({
     intents: [
@@ -29,8 +28,6 @@ const client = new Client({
 });
 
 const activeVoiceChannels = new Map();
-const reconnectTimers = new Map();
-const manualDisconnects = new Set();
 
 function findVoiceChannel(guild, channelName) {
     const target = String(channelName || "").trim();
@@ -45,14 +42,6 @@ function findVoiceChannel(guild, channelName) {
 
         return name === query || name.includes(query);
     }) || null;
-}
-
-function clearReconnect(guildId) {
-    const timer = reconnectTimers.get(guildId);
-    if (timer) {
-        clearTimeout(timer);
-        reconnectTimers.delete(guildId);
-    }
 }
 
 function isConnectionHealthy(connection) {
@@ -77,65 +66,22 @@ function getVoiceStatusLabel(connection) {
     return connection.state.status;
 }
 
-async function reconnectToChannel(guild, channelId) {
-    if (!guild || !channelId) return;
-    if (manualDisconnects.has(guild.id)) return;
+function generateRoomCode() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let code = "";
 
-    const expected = activeVoiceChannels.get(guild.id);
-    if (!expected || expected.channelId !== channelId) return;
-
-    if (reconnectTimers.has(guild.id)) return;
-
-    const attempt = expected.reconnectAttempts || 0;
-    if (attempt >= MAX_RECONNECT_ATTEMPTS) {
-        activeVoiceChannels.delete(guild.id);
-        return;
+    for (let i = 0; i < 5; i += 1) {
+        code += chars[Math.floor(Math.random() * chars.length)];
     }
 
-    const delayMs = Math.min(RECONNECT_DELAY_MS * (attempt + 1), 8000);
+    return code;
+}
 
-    const timer = setTimeout(async () => {
-        reconnectTimers.delete(guild.id);
+function getRoomByCode(code) {
+    const normalizedCode = String(code || "").trim().toUpperCase();
+    if (!normalizedCode) return null;
 
-        if (manualDisconnects.has(guild.id)) return;
-
-        const currentConnection = getVoiceConnection(guild.id);
-        if (isConnectionHealthy(currentConnection) && currentConnection.joinConfig.channelId === channelId) {
-            activeVoiceChannels.set(guild.id, { channelId, reconnectAttempts: 0 });
-            return;
-        }
-
-        const targetChannel = guild.channels.cache.get(channelId);
-        if (!targetChannel || targetChannel.type !== ChannelType.GuildVoice) {
-            activeVoiceChannels.delete(guild.id);
-            return;
-        }
-
-        try {
-            const connection = joinVoiceChannel({
-                channelId: targetChannel.id,
-                guildId: guild.id,
-                adapterCreator: guild.voiceAdapterCreator,
-                selfDeaf: true,
-                selfMute: true
-            });
-
-            activeVoiceChannels.set(guild.id, {
-                channelId,
-                reconnectAttempts: attempt + 1
-            });
-
-            await entersState(connection, VoiceConnectionStatus.Ready, 15000)
-                .catch(() => {
-                    console.warn(`⚠️ Timed out reconnecting to ${targetChannel.name}.`);
-                });
-        } catch (error) {
-            console.error("❌ Reconnect error:", error);
-            reconnectToChannel(guild, channelId);
-        }
-    }, delayMs);
-
-    reconnectTimers.set(guild.id, timer);
+    return gameRooms.get(normalizedCode) ?? null;
 }
 
 client.once(Events.ClientReady, (bot) => {
@@ -165,7 +111,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 "- `/say @user text` — mention user lalu kirim teks",
                 "- `/status` — cek channel bot saat ini",
                 "- `/about` — lihat info bot dan repo",
-                "- `/leave` — keluar dari voice channel"
+                "- `/leave` — keluar dari voice channel",
+                "- `/game [kode]` — buat atau join room game"
             ].join("\n"),
             ephemeral: true
         });
@@ -210,7 +157,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 return interaction.reply(`🐱 Meow~ aku sudah berada di **${currentChannel.name}**.`);
             }
 
-            clearReconnect(guildId);
             if (existingConnection && existingConnection.state.status !== VoiceConnectionStatus.Destroyed) {
                 existingConnection.destroy();
             }
@@ -224,8 +170,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             });
 
             activeVoiceChannels.set(guildId, {
-                channelId: currentChannel.id,
-                reconnectAttempts: 0
+                channelId: currentChannel.id
             });
 
             if (!isConnectionHealthy(connection)) {
@@ -266,7 +211,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 return interaction.reply(`🐱 Meow~ aku sudah ada di **${targetChannel.name}**.`);
             }
 
-            clearReconnect(guildId);
             if (existingConnection && existingConnection.state.status !== VoiceConnectionStatus.Destroyed) {
                 existingConnection.destroy();
             }
@@ -280,8 +224,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             });
 
             activeVoiceChannels.set(guildId, {
-                channelId: targetChannel.id,
-                reconnectAttempts: 0
+                channelId: targetChannel.id
             });
 
             if (!isConnectionHealthy(connection)) {
@@ -306,12 +249,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.commandName === "leave") {
-        clearReconnect(guildId);
-        manualDisconnects.add(guildId);
-
         const connection = getVoiceConnection(guildId);
         if (!connection) {
-            manualDisconnects.delete(guildId);
             return interaction.reply({
                 content: "🐱 Meow~ sedang tidak berada di Voice Channel.",
                 ephemeral: true
@@ -320,10 +259,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         connection.destroy();
         activeVoiceChannels.delete(guildId);
-
-        setTimeout(() => {
-            manualDisconnects.delete(guildId);
-        }, 1000);
 
         await interaction.reply("👋 Meow~ sudah keluar dari Voice Channel.");
         return;
@@ -363,31 +298,77 @@ client.on(Events.InteractionCreate, async (interaction) => {
             `🟢 **Meow~ sedang tersambung**\n📡 Status: **${getVoiceStatusLabel(connection)}**\n🎙️ Channel: **${channel?.name ?? "Unknown"}**`
         );
     }
-});
 
-client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-    if (!client.user || oldState.member?.id !== client.user.id) return;
+    if (interaction.commandName === "game") {
+        const lobbyCode = interaction.options.getString("code")?.trim().toUpperCase();
+        const userId = interaction.user.id;
 
-    const guildId = oldState.guild.id;
-    const expected = activeVoiceChannels.get(guildId);
+        const currentRoom = [...gameRooms.values()].find((room) => room.guildId === guildId && room.players.has(userId));
 
-    if (!expected || manualDisconnects.has(guildId)) return;
+        if (!lobbyCode) {
+            if (currentRoom) {
+                return interaction.reply({
+                    content: `🎮 Kamu sudah ada di room **${currentRoom.code}**. Gunakan /game code:${currentRoom.code} untuk melihat statusnya.`,
+                    ephemeral: true
+                });
+            }
 
-    const currentConnection = getVoiceConnection(guildId);
-    if (isConnectionHealthy(currentConnection) && currentConnection.joinConfig.channelId === expected.channelId) {
-        return;
-    }
+            let newCode = generateRoomCode();
+            while (gameRooms.has(newCode)) {
+                newCode = generateRoomCode();
+            }
 
-    const guild = oldState.guild;
-    const channel = guild.channels.cache.get(expected.channelId);
-    if (!channel) {
-        activeVoiceChannels.delete(guildId);
-        return;
-    }
+            const room = {
+                code: newCode,
+                guildId,
+                players: new Set([userId]),
+                createdBy: interaction.user.id
+            };
 
-    if (newState.channelId === null || !currentConnection || currentConnection.state.status === VoiceConnectionStatus.Disconnected || currentConnection.state.status === VoiceConnectionStatus.Destroyed) {
-        console.log(`⚠️ Meow~ terputus dari ${channel.name}, mencoba reconnect...`);
-        reconnectToChannel(guild, expected.channelId);
+            gameRooms.set(newCode, room);
+
+            return interaction.reply({
+                content: `🎮 Room game baru berhasil dibuat!\nKode room: **${newCode}**\nAda 1/6 pemain di room ini.\nGunakan /game code:${newCode} untuk join room.`,
+                allowedMentions: { parse: [] }
+            });
+        }
+
+        const targetRoom = getRoomByCode(lobbyCode);
+
+        if (!targetRoom) {
+            return interaction.reply({
+                content: `❌ Room dengan kode **${lobbyCode}** tidak ditemukan. Buat room baru dengan /game`,
+                ephemeral: true
+            });
+        }
+
+        if (targetRoom.guildId !== guildId) {
+            return interaction.reply({
+                content: "❌ Kode room ini bukan untuk server ini.",
+                ephemeral: true
+            });
+        }
+
+        if (targetRoom.players.has(userId)) {
+            return interaction.reply({
+                content: `🎮 Kamu sudah masuk ke room **${targetRoom.code}**.`,
+                ephemeral: true
+            });
+        }
+
+        if (targetRoom.players.size >= MAX_GAME_ROOM_PLAYERS) {
+            return interaction.reply({
+                content: `❌ Room **${targetRoom.code}** sudah penuh (maksimal ${MAX_GAME_ROOM_PLAYERS} pemain).`,
+                ephemeral: true
+            });
+        }
+
+        targetRoom.players.add(userId);
+
+        return interaction.reply({
+            content: `✅ Kamu berhasil join room **${targetRoom.code}**.\nJumlah pemain: **${targetRoom.players.size}/${MAX_GAME_ROOM_PLAYERS}**`,
+            allowedMentions: { parse: [] }
+        });
     }
 });
 
