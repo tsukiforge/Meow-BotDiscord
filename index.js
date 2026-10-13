@@ -114,7 +114,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (!guildId) {
         return interaction.reply({
-            content: "❌ Command ini hanya bisa digunakan di server.",
+            content: "Mmm... command ini hanya bisa dipakai di server ya, Meow~",
             ephemeral: true
         });
     }
@@ -122,15 +122,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "help") {
         return interaction.reply({
             content: [
-                "📘 **Daftar command Bot Meow**",
-                "- `/join` — masuk ke voice channel tempatmu saat ini",
-                "- `/help` — lihat daftar command",
-                "- `/ping` — cek respon bot",
-                "- `/move <nama channel>` — pindahkan bot ke voice channel tertentu",
-                "- `/say @user text` — mention user lalu kirim teks",
-                "- `/status` — cek channel bot saat ini",
-                "- `/about` — lihat info bot dan repo",
-                "- `/leave` — keluar dari voice channel",
+                "🐾 **Mmm... ini semua command Meow~**",
+                "- `/join` — Meow masuk ke voice channel kamu",
+                "- `/help` — lihat daftar command ini lagi",
+                "- `/ping` — cek apakah Meow masih menyala",
+                "- `/move <nama channel>` — pindahkan Meow ke voice channel lain",
+                "- `/say @user text` — kirim pesan untuk user tertentu",
+                "- `/status` — cek kondisi koneksi Meow",
+                "- `/about` — lihat info MeowBot",
+                "- `/leave` — minta Meow keluar dari voice channel",
                 "- `/game [kode]` — buat atau join room game"
             ].join("\n"),
             ephemeral: true
@@ -139,7 +139,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === "ping") {
         return interaction.reply({
-            content: "🏓 Pong! Bot masih hidup.",
+            content: "🏓 Pong~ Meow masih menyala dan siap membantu!",
             ephemeral: true
         });
     }
@@ -154,7 +154,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 "",
                 ABOUT_TEXT,
                 "",
-                "**Command utama:** `/join`, `/help`, `/ping`, `/move`, `/status`, `/say`, `/about`, `/leave`"
+                "**Command utama:** `/join`, `/help`, `/ping`, `/move`, `/status`, `/say`, `/about`, `/leave`, `/game`"
             ].join("\n"),
             ephemeral: true
         });
@@ -171,25 +171,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (!currentChannel || currentChannel.type !== ChannelType.GuildVoice) {
             return interaction.reply({
-                content: "❌ Meow~ kamu belum berada di Voice Channel. Masuk ke channel voice lalu jalankan `/join` lagi.",
+                content: "Eh~ Meow belum melihat kamu di Voice Channel. Masuk dulu ke channel voice, lalu coba `/join` lagi ya.",
                 ephemeral: true
             });
         }
 
         try {
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.reply({
+                content: "Mmm... Meow sedang masuk ke Voice Channel, tunggu sebentar ya~",
+                ephemeral: true
+            });
             const result = await voiceManager.setTarget(guildId, currentChannel.id);
             if (result.invalid) {
-                await interaction.editReply("❌ Bot tidak dapat melihat atau bergabung ke channel itu. Target standby dibatalkan.");
+                await interaction.editReply("Aduh~ Meow tidak bisa melihat atau masuk ke channel itu. Target standby dibatalkan ya.");
             } else {
                 await interaction.editReply(result.ready
-                    ? `🐱 Meow~ standby di **${currentChannel.name}**.`
-                    : `⚠️ Meow~ belum berhasil tersambung ke **${currentChannel.name}**. Target tersimpan; jalankan /join lagi untuk mencoba.`);
+                    ? `Yay~ Meow sudah join dan standby di **${currentChannel.name}**!`
+                    : `Hmm... Meow belum berhasil masuk ke **${currentChannel.name}**. Target sudah disimpan dan Meow akan mencoba recovery lagi.`);
             }
         } catch (error) {
             console.error(`[ERROR] ${new Date().toISOString()} /join guild ${guildId}: ${error?.message ?? String(error)}`);
-            if (interaction.deferred) await interaction.editReply("❌ Meow~ gagal masuk ke Voice Channel.");
-            else await interaction.reply({ content: "❌ Meow~ gagal masuk ke Voice Channel.", ephemeral: true });
+            if (interaction.replied || interaction.deferred) await interaction.editReply("Aduh~ Meow gagal masuk ke Voice Channel. Coba `/join` lagi ya.");
+            else await interaction.reply({ content: "Aduh~ Meow gagal masuk ke Voice Channel. Coba `/join` lagi ya.", ephemeral: true });
         }
 
         return;
@@ -201,26 +204,29 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (!targetChannel) {
             return interaction.reply({
-                content: `❌ Channel **${channelName}** tidak ditemukan di server ini.`,
+                content: `Hmm... channel **${channelName}** belum ketemu di server ini, Meow~`,
                 ephemeral: true
             });
         }
 
         try {
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.reply({
+                content: "Mmm... Meow sedang pindah Voice Channel dulu ya~",
+                ephemeral: true
+            });
             const result = await voiceManager.setTarget(guildId, targetChannel.id);
             if (result.invalid) {
-                await interaction.editReply("❌ Bot tidak dapat melihat atau bergabung ke channel itu. Target standby dibatalkan.");
+                await interaction.editReply("Aduh~ Meow tidak bisa melihat atau masuk ke channel itu. Target standby dibatalkan ya.");
             } else {
                 await interaction.editReply(result.ready
-                    ? `🐱 Meow~ standby di **${targetChannel.name}**.`
-                    : `⚠️ Meow~ belum berhasil tersambung ke **${targetChannel.name}**. Target diperbarui; jalankan /move lagi untuk mencoba.`);
+                    ? `Sip~ Meow sudah pindah dan standby di **${targetChannel.name}**!`
+                    : `Hmm... Meow belum berhasil masuk ke **${targetChannel.name}**. Target sudah diperbarui dan recovery akan dicoba.`);
             }
             console.log(`[TARGET] ${new Date().toISOString()} /move: ${targetChannel.name} (${guildId})`);
         } catch (error) {
             console.error(`[ERROR] ${new Date().toISOString()} /move guild ${guildId}: ${error?.message ?? String(error)}`);
-            if (interaction.deferred) await interaction.editReply("❌ Meow~ gagal pindah ke channel voice.");
-            else await interaction.reply({ content: "❌ Meow~ gagal pindah ke channel voice.", ephemeral: true });
+            if (interaction.replied || interaction.deferred) await interaction.editReply("Aduh~ Meow gagal pindah Voice Channel. Coba `/move` lagi ya.");
+            else await interaction.reply({ content: "Aduh~ Meow gagal pindah Voice Channel. Coba `/move` lagi ya.", ephemeral: true });
         }
 
         return;
@@ -229,7 +235,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "leave") {
         await voiceManager.leave(guildId);
         await interaction.reply({
-            content: "👋 Meow~ sudah keluar dari Voice Channel.",
+            content: "Oke~ Meow sudah keluar dari Voice Channel. Kalau mau masuk lagi, panggil `/join` ya!",
             ephemeral: true
         });
         return;
@@ -241,7 +247,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (!targetUser || !text) {
             return interaction.reply({
-                content: "❌ Gunakan format `/say @user text` dengan user dan teks yang valid.",
+                content: "Mmm... formatnya `/say @user text` ya. Pilih user dan isi pesannya dulu~",
                 ephemeral: true
             });
         }
@@ -261,15 +267,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "status") {
         const status = voiceManager.status(guildId);
         if (status.state === "no-target") {
-            return interaction.reply({ content: "⚪ Meow~ belum memiliki target standby. Gunakan `/join` saat berada di Voice Channel, atau `/move` untuk memilih channel.", ephemeral: true });
+            return interaction.reply({ content: "Mmm... Meow belum punya target standby. Gunakan `/join` saat kamu ada di Voice Channel, atau `/move` untuk memilih channel.", ephemeral: true });
         }
         const channel = interaction.guild.channels.cache.get(status.channelId) ??
             await interaction.guild.channels.fetch(status.channelId).catch(() => null);
         const label = {
-            ready: "🟢 Terhubung dan Ready",
-            connecting: "🟠 Sedang menyambung atau memulihkan koneksi",
-            failed: "🔴 Terputus/gagal; jalankan /join untuk menyambungkan",
-            disconnected: "🔴 Terputus"
+            ready: "🟢 Meow sudah terhubung dan standby",
+            connecting: "🟠 Mmm... Meow sedang menyambung atau recovery",
+            failed: "🔴 Meow belum tersambung. Coba `/join` lagi ya",
+            disconnected: "🔴 Meow sedang tidak terhubung"
         }[status.state];
         return interaction.reply({
             content: `${label ?? "⚪ Status tidak diketahui"}\n📡 Status koneksi: **${status.connectionStatus}**\n🎙️ Target: **${channel?.name ?? status.channelId}**\n🛠️ Upaya koneksi/recovery berjalan: **${status.connecting ? "Ya" : "Tidak"}**${status.lastError ? `\n⚠️ Keterangan: ${status.lastError}` : ""}`,
@@ -286,7 +292,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!lobbyCode) {
             if (currentRoom) {
                 return interaction.reply({
-                    content: `🎮 Kamu sudah ada di room **${currentRoom.code}**. Gunakan /game code:${currentRoom.code} untuk melihat statusnya.`,
+                    content: `Mmm... kamu sudah ada di room **${currentRoom.code}**. Gunakan /game code:${currentRoom.code} untuk cek room itu ya~`,
                     ephemeral: true
                 });
             }
@@ -306,7 +312,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             gameRooms.set(newCode, room);
 
             return interaction.reply({
-                content: `🎮 Room game baru berhasil dibuat!\nKode room: **${newCode}**\nAda 1/6 pemain di room ini.\nGunakan /game code:${newCode} untuk join room.`,
+                content: `Yay~ room game baru sudah dibuat!\nKode room: **${newCode}**\nPemain: 1/6\nGunakan /game code:${newCode} untuk ikut join ya~`,
                 ephemeral: true,
                 allowedMentions: { parse: [] }
             });
@@ -316,28 +322,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (!targetRoom) {
             return interaction.reply({
-                content: `❌ Room dengan kode **${lobbyCode}** tidak ditemukan. Buat room baru dengan /game`,
+                content: `Hmm... room **${lobbyCode}** belum ketemu. Buat room baru dengan /game ya~`,
                 ephemeral: true
             });
         }
 
         if (targetRoom.guildId !== guildId) {
             return interaction.reply({
-                content: "❌ Kode room ini bukan untuk server ini.",
+                content: "Aduh~ kode room ini bukan untuk server ini ya.",
                 ephemeral: true
             });
         }
 
         if (targetRoom.players.has(userId)) {
             return interaction.reply({
-                content: `🎮 Kamu sudah masuk ke room **${targetRoom.code}**.`,
+                content: `Mmm... kamu sudah ada di room **${targetRoom.code}** kok~`,
                 ephemeral: true
             });
         }
 
         if (targetRoom.players.size >= MAX_GAME_ROOM_PLAYERS) {
             return interaction.reply({
-                content: `❌ Room **${targetRoom.code}** sudah penuh (maksimal ${MAX_GAME_ROOM_PLAYERS} pemain).`,
+                content: `Aduh~ room **${targetRoom.code}** sudah penuh, maksimal ${MAX_GAME_ROOM_PLAYERS} pemain ya.`,
                 ephemeral: true
             });
         }
@@ -345,7 +351,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         targetRoom.players.add(userId);
 
         return interaction.reply({
-            content: `✅ Kamu berhasil join room **${targetRoom.code}**.\nJumlah pemain: **${targetRoom.players.size}/${MAX_GAME_ROOM_PLAYERS}**`,
+            content: `Yay~ kamu berhasil join room **${targetRoom.code}**!\nPemain sekarang: **${targetRoom.players.size}/${MAX_GAME_ROOM_PLAYERS}**`,
             ephemeral: true,
             allowedMentions: { parse: [] }
         });

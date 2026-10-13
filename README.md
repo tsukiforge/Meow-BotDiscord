@@ -44,13 +44,11 @@ Bot Discord ringan dan sederhana untuk server kecil. Fokus utama bot ini adalah 
    ```env
    DISCORD_TOKEN=your_discord_bot_token
    CLIENT_ID=your_application_id
-   GUILD_ID=your_server_id
-   AUTO_REJOIN_ON_START=true
    ```
 
-5. Daftarkan slash command ke guild yang dituju
+5. Daftarkan slash command otomatis ke semua guild yang bisa diakses bot
    ```bash
-   node deploy-commands.js
+   node deploy-commands.js  # otomatis ke semua guild yang ditemukan bot
    ```
 
 6. Jalankan bot secara permanen
@@ -96,14 +94,13 @@ Mengirim pesan dengan mention user tertentu tanpa memicu mention massal. Format 
 3. Set variabel environment di Wispbyte:
    - `DISCORD_TOKEN`
    - `CLIENT_ID`
-   - `GUILD_ID`
 4. Jalankan perintah install secara manual jika diperlukan:
    ```bash
    npm install
    ```
 5. Jalankan pendaftaran command satu kali:
    ```bash
-   node deploy-commands.js
+   node deploy-commands.js  # otomatis ke semua guild yang ditemukan bot
    ```
 6. Gunakan `npm start` sebagai command boot utama bot (`node index.js`). Jangan gunakan `node deploy-commands.js` sebagai proses utama.
 7. Aktifkan opsi auto-restart/restart-on-crash di panel Wispbyte jika tersedia untuk paket/server Anda. Pastikan startup command tetap `npm start`, dan periksa console/log panel setelah crash. Ketersediaan serta nama opsi restart berbeda menurut paket dan panel Wispbyte; repository ini tidak dapat memastikan fitur itu aktif di akun Anda.
@@ -125,4 +122,4 @@ Jalankan tes logika koneksi dengan `npm test`.
 ## Catatan
 - Bot dibuat ringan dan cocok untuk hosting gratis atau server kecil.
 - Fitur musik, streaming audio, dan dependency berat tidak termasuk dalam project ini.
-- Command bersifat guild-scoped sesuai konfigurasi saat ini (`GUILD_ID`).
+- Command didaftarkan otomatis ke semua guild yang sedang bisa diakses bot.

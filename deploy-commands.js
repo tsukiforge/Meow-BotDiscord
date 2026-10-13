@@ -1,6 +1,9 @@
 require("dotenv").config();
 
 const {
+    Client,
+    GatewayIntentBits,
+    Events,
     REST,
     Routes,
     ApplicationCommandOptionType
@@ -9,23 +12,23 @@ const {
 const commands = [
     {
         name: "join",
-        description: "Masuk ke Voice Channel tempatmu saat ini"
+        description: "Meow masuk ke voice channel kamu"
     },
     {
         name: "help",
-        description: "Lihat daftar command bot"
+        description: "Lihat semua command Meow"
     },
     {
         name: "ping",
-        description: "Cek respon bot"
+        description: "Cek apakah Meow masih menyala"
     },
     {
         name: "move",
-        description: "Pindahkan bot ke channel voice tertentu",
+        description: "Pindahkan Meow ke voice channel lain",
         options: [
             {
                 name: "channel",
-                description: "Nama channel voice",
+                description: "Nama voice channel tujuan",
                 type: ApplicationCommandOptionType.String,
                 required: true
             }
@@ -33,7 +36,7 @@ const commands = [
     },
     {
         name: "say",
-        description: "Mention user dan kirim text tertentu",
+        description: "Kirim pesan untuk user tertentu",
         options: [
             {
                 name: "user",
@@ -51,19 +54,19 @@ const commands = [
     },
     {
         name: "about",
-        description: "Lihat info bot, developer, dan repo"
+        description: "Lihat info tentang MeowBot"
     },
     {
         name: "status",
-        description: "Cek channel bot saat ini"
+        description: "Cek status koneksi Meow"
     },
     {
         name: "leave",
-        description: "Keluar dari Voice Channel"
+        description: "Minta Meow keluar dari voice channel"
     },
-     {
+    {
         name: "game",
-        description: "Buat room game baru atau join room yang sudah ada",
+        description: "Buat atau join room game",
         options: [
             {
                 name: "code",
@@ -72,44 +75,54 @@ const commands = [
                 required: false
             }
         ]
-
-    },
+    }
 ];
 
+const client = new Client({
+    intents: [GatewayIntentBits.Guilds]
+});
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
+const DEPLOY_TIMEOUT_MS = 30000;
 
-(async () => {
-    let timeout;
-    try {
-        if (!process.env.CLIENT_ID || !process.env.GUILD_ID || !process.env.DISCORD_TOKEN) {
-            throw new Error("ENV belum lengkap. Harap isi DISCORD_TOKEN, CLIENT_ID, dan GUILD_ID di .env");
-        }
-
-        console.log(`[DEPLOY] ${new Date().toISOString()} mendaftarkan commands`);
-
-        const deployPromise = rest.put(
-            Routes.applicationGuildCommands(
-                process.env.CLIENT_ID,
-                process.env.GUILD_ID
-            ),
-            {
-                body: commands
-            }
-        );
-
-        const timeoutPromise = new Promise((_, reject) => {
-            timeout = setTimeout(() => {
-                reject(new Error("Discord API timeout setelah 15 detik."));
-            }, 15000);
-        });
-
-        const result = await Promise.race([deployPromise, timeoutPromise]);
-        clearTimeout(timeout);
-
-        console.log(`[DEPLOY] ${new Date().toISOString()} ${result.length} commands berhasil didaftarkan`);
-    } catch (error) {
-        if (timeout) clearTimeout(timeout);
-        console.error(`[ERROR] ${new Date().toISOString()} deploy slash commands: ${error?.message ?? String(error)}`);
-        process.exitCode = 1;
+async function deployCommands() {
+    if (!process.env.CLIENT_ID || !process.env.DISCORD_TOKEN) {
+        throw new Error("ENV belum lengkap. Isi DISCORD_TOKEN dan CLIENT_ID di .env");
     }
-})();
+
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Login Discord timeout setelah 30 detik.")), DEPLOY_TIMEOUT_MS);
+        client.once(Events.ClientReady, () => {
+            clearTimeout(timeout);
+            resolve();
+        });
+        client.login(process.env.DISCORD_TOKEN).catch((error) => {
+            clearTimeout(timeout);
+            reject(error);
+        });
+    });
+
+    const guilds = [...client.guilds.cache.values()];
+    if (guilds.length === 0) {
+        throw new Error("Bot belum terdaftar di guild mana pun atau tidak memiliki akses Guilds.");
+    }
+
+    console.log(`[DEPLOY] ${new Date().toISOString()} menemukan ${guilds.length} guild; mendaftarkan command...`);
+    for (const guild of guilds) {
+        const result = await rest.put(
+            Routes.applicationGuildCommands(process.env.CLIENT_ID, guild.id),
+            { body: commands }
+        );
+        console.log(`[DEPLOY] ${new Date().toISOString()} ${guild.name} (${guild.id}): ${result.length} command aktif`);
+    }
+}
+
+deployCommands()
+    .then(() => {
+        console.log(`[DEPLOY] ${new Date().toISOString()} semua command selesai didaftarkan`);
+        client.destroy();
+    })
+    .catch((error) => {
+        console.error(`[ERROR] ${new Date().toISOString()} pendaftaran command gagal: ${error?.message ?? String(error)}`);
+        client.destroy();
+        process.exitCode = 1;
+    });
