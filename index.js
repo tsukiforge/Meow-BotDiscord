@@ -59,8 +59,12 @@ function getRoomByCode(code) {
 }
 
 client.once(Events.ClientReady, async (bot) => {
-    console.log(`[BOT] ${new Date().toISOString()} online sebagai ${bot.user.tag}`);
-    await voiceManager.restoreTargets({ autoReconnect: AUTO_REJOIN_ON_START });
+    try {
+        console.log(`[BOT] ${new Date().toISOString()} online sebagai ${bot.user.tag}`);
+        await voiceManager.restoreTargets({ autoReconnect: AUTO_REJOIN_ON_START });
+    } catch (error) {
+        console.error(`[ERROR] ${new Date().toISOString()} startup voice recovery gagal: ${error?.message ?? String(error)}`);
+    }
 });
 
 client.on(Events.ShardDisconnect, (event, shardId) => {
@@ -74,6 +78,12 @@ client.on(Events.ShardResume, (shardId, replayedEvents) => {
 });
 client.on(Events.Error, (error) => {
     console.error(`[ERROR] ${new Date().toISOString()} Discord client: ${error?.message ?? String(error)}`);
+});
+client.on(Events.Warn, (message) => {
+    console.warn(`[WARN] ${new Date().toISOString()} Discord client: ${message}`);
+});
+client.on(Events.ShardError, (error, shardId) => {
+    console.error(`[ERROR] ${new Date().toISOString()} shard ${shardId} error: ${error?.message ?? String(error)}`);
 });
 client.on(Events.ChannelDelete, (channel) => {
     voiceManager.onChannelDeleted(channel).catch((error) => {
@@ -151,7 +161,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.commandName === "join") {
-        const currentChannel = interaction.member?.voice?.channel;
+        let currentChannel = interaction.member?.voice?.channel ?? null;
+        try {
+            const member = await interaction.guild.members.fetch(interaction.user.id);
+            currentChannel = member.voice?.channel ?? null;
+        } catch (error) {
+            console.warn(`[WARN] ${new Date().toISOString()} gagal mengambil voice state user ${interaction.user.id}: ${error?.message ?? String(error)}`);
+        }
 
         if (!currentChannel || currentChannel.type !== ChannelType.GuildVoice) {
             return interaction.reply({
@@ -212,7 +228,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === "leave") {
         await voiceManager.leave(guildId);
-        await interaction.reply("👋 Meow~ sudah keluar dari Voice Channel.");
+        await interaction.reply({
+            content: "👋 Meow~ sudah keluar dari Voice Channel.",
+            ephemeral: true
+        });
         return;
     }
 
@@ -229,6 +248,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.reply({
             content: `${targetUser} ${text}`,
+            ephemeral: true,
             allowedMentions: {
                 parse: [],
                 users: [targetUser.id]
@@ -241,17 +261,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "status") {
         const status = voiceManager.status(guildId);
         if (status.state === "no-target") {
-            return interaction.reply({ content: "⚪ Meow~ tidak memiliki target standby.", ephemeral: true });
+            return interaction.reply({ content: "⚪ Meow~ belum memiliki target standby. Gunakan `/join` saat berada di Voice Channel, atau `/move` untuk memilih channel.", ephemeral: true });
         }
-        const channel = interaction.guild.channels.cache.get(status.channelId);
+        const channel = interaction.guild.channels.cache.get(status.channelId) ??
+            await interaction.guild.channels.fetch(status.channelId).catch(() => null);
         const label = {
             ready: "🟢 Terhubung dan Ready",
-            connecting: "🟠 Sedang menyambung atas command manual",
+            connecting: "🟠 Sedang menyambung atau memulihkan koneksi",
             failed: "🔴 Terputus/gagal; jalankan /join untuk menyambungkan",
             disconnected: "🔴 Terputus"
         }[status.state];
         return interaction.reply({
-            content: `${label}\n📡 Status koneksi: **${status.connectionStatus}**\n🎙️ Target: **${channel?.name ?? status.channelId}**\n🛠️ Percobaan manual berjalan: **${status.connecting ? "Ya" : "Tidak"}**${status.lastError ? `\n⚠️ Keterangan: ${status.lastError}` : ""}`,
+            content: `${label ?? "⚪ Status tidak diketahui"}\n📡 Status koneksi: **${status.connectionStatus}**\n🎙️ Target: **${channel?.name ?? status.channelId}**\n🛠️ Upaya koneksi/recovery berjalan: **${status.connecting ? "Ya" : "Tidak"}**${status.lastError ? `\n⚠️ Keterangan: ${status.lastError}` : ""}`,
             ephemeral: true
         });
     }
@@ -286,6 +307,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
             return interaction.reply({
                 content: `🎮 Room game baru berhasil dibuat!\nKode room: **${newCode}**\nAda 1/6 pemain di room ini.\nGunakan /game code:${newCode} untuk join room.`,
+                ephemeral: true,
                 allowedMentions: { parse: [] }
             });
         }
@@ -324,6 +346,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         return interaction.reply({
             content: `✅ Kamu berhasil join room **${targetRoom.code}**.\nJumlah pemain: **${targetRoom.players.size}/${MAX_GAME_ROOM_PLAYERS}**`,
+            ephemeral: true,
             allowedMentions: { parse: [] }
         });
     }
@@ -347,6 +370,10 @@ process.once("SIGTERM", () => shutdown("SIGTERM").catch((error) => {
     console.error(`[ERROR] ${new Date().toISOString()} shutdown SIGTERM: ${error?.message ?? String(error)}`);
     process.exitCode = 1;
 }));
+
+process.on("unhandledRejection", (reason) => {
+    console.error(`[ERROR] ${new Date().toISOString()} unhandled promise rejection: ${reason?.stack ?? reason}`);
+});
 
 console.log(`[BOT] ${new Date().toISOString()} memulai proses utama`);
 if (!process.env.DISCORD_TOKEN) {
