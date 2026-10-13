@@ -45,6 +45,7 @@ Bot Discord ringan dan sederhana untuk server kecil. Fokus utama bot ini adalah 
    DISCORD_TOKEN=your_discord_bot_token
    CLIENT_ID=your_application_id
    GUILD_ID=your_server_id
+   AUTO_REJOIN_ON_START=true
    ```
 
 5. Daftarkan slash command ke guild yang dituju
@@ -106,16 +107,17 @@ Mengirim pesan dengan mention user tertentu tanpa memicu mention massal. Format 
    ```
 6. Gunakan `npm start` sebagai command boot utama bot (`node index.js`). Jangan gunakan `node deploy-commands.js` sebagai proses utama.
 7. Aktifkan opsi auto-restart/restart-on-crash di panel Wispbyte jika tersedia untuk paket/server Anda. Pastikan startup command tetap `npm start`, dan periksa console/log panel setelah crash. Ketersediaan serta nama opsi restart berbeda menurut paket dan panel Wispbyte; repository ini tidak dapat memastikan fitur itu aktif di akun Anda.
-8. Pastikan filesystem tempat bot berjalan tetap ada di antara restart dan gunakan direktori kerja project yang sama. Target disimpan di `voice-targets.json` (hanya ID guild/channel, tanpa token). Setelah server/proses menyala kembali, jalankan `/join` secara manual agar bot masuk voice; target dari file tidak membuat bot join otomatis. Jika filesystem/container bersifat ephemeral atau file dihapus saat redeploy, target tersimpan tidak tersedia.
+8. Pastikan filesystem tempat bot berjalan tetap ada di antara restart dan gunakan direktori kerja project yang sama. Target disimpan di `voice-targets.json` (hanya ID guild/channel, tanpa token). Setelah server/proses menyala kembali, bot akan mencoba auto-rejoin jika `AUTO_REJOIN_ON_START=true`; jika tidak, jalankan `/join` atau `/move` secara manual. Jika filesystem/container bersifat ephemeral atau file dihapus saat redeploy, target tersimpan tidak tersedia.
 
 `deploy-commands.js` dijalankan satu kali secara terpisah setelah perubahan command. Proses utamanya hanya `index.js`; bot tidak membuat proses tambahan untuk menghindari batas hosting.
 
 ## Voice standby dan pemulihan
-- `/join` menyimpan target channel dan menyambungkan bot atas permintaan manual. Jika proses restart, jalankan `/join` lagi; target tersimpan hanya membantu mempertahankan pilihan channel.
+- `/join` menyimpan target channel dan menyambungkan bot atas permintaan manual. Setelah proses restart, bot otomatis mencoba masuk kembali ke target tersimpan jika `AUTO_REJOIN_ON_START=true`.
 - `/move` mengganti target dan mencoba koneksi atas permintaan manual; `/leave` memutus koneksi serta menghapus target tersimpan.
 - Jika koneksi voice terputus tanpa disengaja, bot menjalankan Fast Recovery dengan retry terbatas dan backoff pendek. Recovery tidak membuat koneksi ganda, memvalidasi ulang guild/channel/izin, dan berhenti setelah seluruh percobaan gagal. Jalankan `/join` atau `/move` untuk memulai sesi manual baru setelah itu. Channel yang tidak tersedia atau tidak memiliki izin tidak digunakan.
 - `/status` menampilkan keadaan koneksi aktual, target, dan apakah upaya koneksi atau recovery sedang berjalan. Status proses yang benar-benar mati hanya bisa dipastikan dari panel/log hosting, bukan melalui slash command.
 - `/leave` membatalkan timer serta seluruh upaya recovery yang tertunda. Bot tidak akan masuk kembali ke voice channel sampai `/join` atau `/move` dijalankan lagi.
+- Set `AUTO_REJOIN_ON_START=false` jika sesi voice harus menunggu `/join` atau `/move` manual setelah restart. Target tetap divalidasi sebelum auto-rejoin dan target yang sudah tidak valid akan dihapus.
 - Bot tidak menjamin uptime 100%. Pemulihan bergantung pada Discord, izin bot, ketersediaan filesystem target, dan konfigurasi restart Wispbyte.
 
 Jalankan tes logika koneksi dengan `npm test`.

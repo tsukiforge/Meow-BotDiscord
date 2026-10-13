@@ -91,7 +91,7 @@ function createHarness({ readiness = [], allowed = true, storedTargets = [] } = 
     };
     const manager = new VoiceManager(client, {
         voice,
-        logger: { log() {}, error() {} },
+        logger: { log() {}, warn() {}, error() {} },
         retryDelaysMs: [10, 20, 30],
         cooldownMs: 100,
         storage: {
@@ -223,6 +223,17 @@ test("startup loads saved target without making a voice connection", async () =>
 
     assert.equal(harness.manager.status("guild-1").state, "disconnected");
     assert.equal(harness.joinCalls, 0);
+    await harness.manager.close();
+});
+
+test("startup auto-rejoins a valid saved target when enabled", async () => {
+    const harness = createHarness({ storedTargets: [{ guildId: "guild-1", channelId: "channel-1" }] });
+
+    await harness.manager.restoreTargets({ autoReconnect: true });
+
+    assert.equal(harness.joinCalls, 1);
+    assert.equal(harness.manager.status("guild-1").state, "ready");
+    assert.equal(harness.timers.size, 0);
     await harness.manager.close();
 });
 

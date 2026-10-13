@@ -13,6 +13,7 @@ const DEVELOPER_NAME = "tsukiforge";
 const REPO_URL = "https://github.com/tsukiforge/Meow-BotDiscord";
 const ABOUT_TEXT = "MeowBot adalah bot Discord ringan yang dibuat untuk membantu server dengan fitur sederhana, friendly, dan mudah digunakan.";
 const MAX_GAME_ROOM_PLAYERS = 6;
+const AUTO_REJOIN_ON_START = process.env.AUTO_REJOIN_ON_START !== "false";
 const gameRooms = new Map();
 
 const client = new Client({
@@ -59,7 +60,7 @@ function getRoomByCode(code) {
 
 client.once(Events.ClientReady, async (bot) => {
     console.log(`[BOT] ${new Date().toISOString()} online sebagai ${bot.user.tag}`);
-    await voiceManager.restoreTargets();
+    await voiceManager.restoreTargets({ autoReconnect: AUTO_REJOIN_ON_START });
 });
 
 client.on(Events.ShardDisconnect, (event, shardId) => {
@@ -229,7 +230,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await interaction.reply({
             content: `${targetUser} ${text}`,
             allowedMentions: {
-                parse: ["users"]
+                parse: [],
+                users: [targetUser.id]
             }
         });
 

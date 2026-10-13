@@ -84,7 +84,7 @@ class VoiceManager {
         }
     }
 
-    async restoreTargets() {
+    async restoreTargets({ autoReconnect = false } = {}) {
         let targets;
         try {
             targets = await this.storage.load();
@@ -97,7 +97,17 @@ class VoiceManager {
             if (!target?.guildId || !target?.channelId || this.closed) continue;
             const entry = this.createEntry(target.guildId, target.channelId);
             this.entries.set(entry.guildId, entry);
-            this.logger.log(`[TARGET] ${new Date().toISOString()} Target ${entry.channelId} guild ${entry.guildId} dimuat; menunggu /join manual`);
+            if (autoReconnect) {
+                this.logger.log(`[TARGET] ${new Date().toISOString()} Target ${entry.channelId} guild ${entry.guildId} dimuat; auto-rejoin dimulai`);
+                const result = await this.attempt(entry, "pemulihan setelah restart");
+                if (result.ready) {
+                    this.logger.log(`[TARGET] ${new Date().toISOString()} Auto-rejoin guild ${entry.guildId} berhasil`);
+                } else if (!result.invalid && !result.cancelled) {
+                    this.logger.warn(`[TARGET] ${new Date().toISOString()} Auto-rejoin guild ${entry.guildId} belum berhasil; recovery terjadwal`);
+                }
+            } else {
+                this.logger.log(`[TARGET] ${new Date().toISOString()} Target ${entry.channelId} guild ${entry.guildId} dimuat; menunggu /join manual`);
+            }
         }
     }
 
