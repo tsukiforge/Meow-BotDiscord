@@ -32,13 +32,18 @@ class VoiceManager {
         this.setInterval = options.setInterval ?? setInterval;
         this.clearInterval = options.clearInterval ?? clearInterval;
         this.entries = new Map();
+        this.leftGuilds = new Set();
         this.closed = false;
         this.watchdogTimer = null;
         this.storePath = options.storePath ?? path.join(process.cwd(), "voice-targets.json");
-        this.storage = options.storage ?? {
+        const persistTargets = process.env.PERSIST_TARGETS !== "false";
+        this.storage = options.storage ?? (persistTargets ? {
             load: () => this.readTargets(),
             save: (targets) => this.writeTargets(targets)
-        };
+        } : {
+            load: () => [],
+            save: () => {}
+        });
     }
 
     log(message) {
@@ -52,6 +57,11 @@ class VoiceManager {
     errorLog(message, error) {
         const detail = error?.message ? `: ${error.message}` : "";
         this.logger.error(`[ERROR] ${new Date().toISOString()} ${message}${detail}`);
+    }
+
+    warnLog(message, error) {
+        const detail = error?.message ? `: ${error.message}` : "";
+        this.logger.warn(`[WARN] ${new Date().toISOString()} ${message}${detail}`);
     }
 
     readTargets() {
@@ -115,6 +125,7 @@ class VoiceManager {
                 this.logger.log(`[TARGET] ${new Date().toISOString()} Target ${entry.channelId} guild ${entry.guildId} dimuat; menunggu /join manual`);
             }
         }
+        await this.adoptCurrentVoiceStates("adopsi voice state saat restore");
     }
 
     createEntry(guildId, channelId) {
@@ -135,8 +146,20 @@ class VoiceManager {
 
     async setTarget(guildId, channelId) {
         if (this.closed) throw new Error("Pengelola voice sedang dihentikan");
+        this.leftGuilds.delete(guildId);
         const oldEntry = this.entries.get(guildId);
         if (oldEntry?.channelId === channelId) {
+            if (oldEntry.inFlight) {
+                return oldEntry.inFlight;
+            }
+            if (oldEntry.retryTimer) {
+                return Promise.resolve({ ready: false, pending: true, connecting: true });
+            }
+            const connection = oldEntry.connection ?? this.voice.getVoiceConnection(guildId);
+            const connectionMatchesTarget = connection?.joinConfig?.channelId === oldEntry.channelId;
+            if (connection?.state.status === this.voice.VoiceConnectionStatus.Ready && connectionMatchesTarget) {
+                return { ready: true };
+            }
             this.cancelRecovery(oldEntry);
             oldEntry.failed = false;
             oldEntry.retryIndex = 0;
@@ -153,6 +176,7 @@ class VoiceManager {
     }
 
     async leave(guildId) {
+        this.leftGuilds.add(guildId);
         const entry = this.entries.get(guildId);
         if (entry) {
             this.entries.delete(guildId);
@@ -207,8 +231,34 @@ class VoiceManager {
         this.watchdogTimer = null;
     }
 
+    async adoptCurrentVoiceStates(reason = "adopsi voice state saat ini") {
+        if (this.closed) return;
+        try {
+            for (const guild of this.client.guilds.cache.values()) {
+                if (this.leftGuilds.has(guild.id)) continue;
+                const botMember = guild.members.me;
+                if (!botMember) continue;
+                const channelId = botMember.voice?.channelId;
+                if (!channelId) continue;
+                const entry = this.entries.get(guild.id);
+                if (!entry) {
+                    const newEntry = this.createEntry(guild.id, channelId);
+                    this.entries.set(guild.id, newEntry);
+                    this.ensureWatchdog();
+                    this.persistTargets();
+                    this.attempt(newEntry, reason).catch((error) => {
+                        this.errorLog(`Adopsi voice state guild ${guild.id}`, error);
+                    });
+                }
+            }
+        } catch (error) {
+            this.errorLog("Gagal mengadopsi voice state saat ini", error);
+        }
+    }
+
     async checkTargets() {
         if (this.closed) return;
+        await this.adoptCurrentVoiceStates("watchdog adopsi voice state");
         const attempts = [];
         for (const entry of this.entries.values()) {
             if (this.entries.get(entry.guildId) !== entry || entry.inFlight || entry.retryTimer) continue;
@@ -222,6 +272,7 @@ class VoiceManager {
 
     async reconnectTargets(reason = "gateway pulih") {
         if (this.closed) return;
+        await this.adoptCurrentVoiceStates(`adopsi voice state saat ${reason}`);
         const attempts = [];
         for (const entry of this.entries.values()) {
             if (entry.inFlight) continue;
@@ -245,6 +296,8 @@ class VoiceManager {
                     await this.invalidateTarget(entry, "guild tidak tersedia atau bot sudah keluar");
                     return null;
                 }
+                entry.lastError = error.message;
+                this.warnLog(`Gagal mengambil guild ${entry.guildId}; target tetap disimpan, recovery lanjut`, error);
                 throw error;
             }
         }
@@ -254,10 +307,17 @@ class VoiceManager {
             try {
                 channel = await guild.channels.fetch(entry.channelId);
             } catch (error) {
-                if (error.code === 10003 || error.code === 50001) {
-                    await this.invalidateTarget(entry, "channel tidak tersedia atau tidak dapat dilihat");
+                if (error.code === 10003) {
+                    await this.invalidateTarget(entry, "channel dihapus");
                     return null;
                 }
+                if (error.code === 50001) {
+                    entry.lastError = error.message;
+                    this.warnLog(`Akses channel ${entry.channelId} tidak tersedia (Missing Access); target tetap disimpan, recovery lanjut`, error);
+                    throw error;
+                }
+                entry.lastError = error.message;
+                this.warnLog(`Gagal mengambil channel ${entry.channelId}; target tetap disimpan, recovery lanjut`, error);
                 throw error;
             }
         }
@@ -270,8 +330,9 @@ class VoiceManager {
         const botMember = guild.members.me ?? await guild.members.fetchMe();
         const permissions = botMember && channel.permissionsFor(botMember);
         if (!permissions?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect])) {
-            await this.invalidateTarget(entry, "izin View Channel atau Connect tidak tersedia");
-            return null;
+            entry.lastError = "Izin View Channel atau Connect tidak tersedia";
+            this.warnLog(`Izin tidak cukup untuk channel ${entry.channelId} guild ${entry.guildId}; target tetap disimpan, recovery lanjut`);
+            throw new Error("Missing required voice permissions");
         }
 
         return { guild, channel };
@@ -351,7 +412,7 @@ class VoiceManager {
         } catch (error) {
             if (!this.isCurrent(entry, generation)) return { ready: false, cancelled: true };
             entry.lastError = error.message;
-            this.errorLog(`Koneksi manual guild ${entry.guildId}, channel ${entry.channelId}`, error);
+            this.errorLog(`Percobaan koneksi guild ${entry.guildId}, channel ${entry.channelId} (${reason})`, error);
             return { ready: false, error };
         }
     }
@@ -368,16 +429,34 @@ class VoiceManager {
             syncNetworking(newState);
             if (newState.status === this.voice.VoiceConnectionStatus.Ready) {
                 this.markReady(entry, "event Ready");
-            } else if (newState.status === this.voice.VoiceConnectionStatus.Disconnected ||
-                newState.status === this.voice.VoiceConnectionStatus.Destroyed) {
+            } else if (newState.status === this.voice.VoiceConnectionStatus.Disconnected) {
+                if (this.entries.get(entry.guildId) === entry && !entry.inFlight) {
+                    (async () => {
+                        try {
+                            try {
+                                await this.voice.entersState(connection, this.voice.VoiceConnectionStatus.Signalling, 5000);
+                            } catch {
+                                await this.voice.entersState(connection, this.voice.VoiceConnectionStatus.Connecting, 5000);
+                            }
+                            this.log(`Guild ${entry.guildId} pulih sendiri menuju Ready setelah Disconnected`);
+                        } catch (error) {
+                            if (this.entries.get(entry.guildId) === entry && !entry.inFlight) {
+                                entry.failed = true;
+                                entry.reconnecting = false;
+                                entry.lastError = `Koneksi Disconnected; recovery otomatis berjalan`;
+                                this.log(`Guild ${entry.guildId} tidak pulih dalam 5 detik; recovery terjadwal`);
+                                this.detachConnection(entry, connection, true);
+                                this.scheduleRecovery(entry);
+                            }
+                        }
+                    })();
+                }
+            } else if (newState.status === this.voice.VoiceConnectionStatus.Destroyed) {
                 if (this.entries.get(entry.guildId) === entry && !entry.inFlight) {
                     entry.failed = true;
                     entry.reconnecting = false;
                     entry.lastError = `Koneksi ${newState.status}; recovery otomatis berjalan`;
                     this.log(`Guild ${entry.guildId} terputus; recovery terjadwal`);
-                    if (newState.status === this.voice.VoiceConnectionStatus.Disconnected) {
-                        this.detachConnection(entry, connection, true);
-                    }
                     this.scheduleRecovery(entry);
                 }
             }
@@ -528,16 +607,13 @@ class VoiceManager {
     async onChannelUpdated(channel) {
         const entry = [...this.entries.values()].find((item) => item.channelId === channel.id);
         if (entry && this.entries.get(entry.guildId) === entry) {
-            const target = await this.getValidTarget(entry);
-            if (target) this.log(`Target ${entry.channelId} tetap valid setelah perubahan channel`);
+            this.log(`Channel ${channel.id} diperbarui; target ${entry.channelId} tetap disimpan`);
         }
     }
 
     async onGuildMemberUpdated(guildId) {
         const entry = this.entries.get(guildId);
-        if (!entry) return;
-        const target = await this.getValidTarget(entry);
-        if (target) this.log(`Izin bot untuk target ${entry.channelId} masih tersedia`);
+        if (entry) this.log(`Izin bot berubah di guild ${guildId}; target ${entry.channelId} tetap disimpan`);
     }
 
     async onGuildDeleted(guildId) {
@@ -552,4 +628,9 @@ class VoiceManager {
     }
 }
 
-module.exports = { VoiceManager };
+function isAlreadyInChannel(status, botVoiceChannelId, channelId) {
+    const sameTarget = status.channelId === channelId;
+    return (status.state === "ready" && sameTarget) || (botVoiceChannelId === channelId && sameTarget);
+}
+
+module.exports = { VoiceManager, isAlreadyInChannel };

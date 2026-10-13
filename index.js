@@ -5,10 +5,14 @@ const {
     GatewayIntentBits,
     Events,
     ChannelType,
-    MessageFlags
+    MessageFlags,
+    REST,
+    Routes
 } = require("discord.js");
 const { generateDependencyReport } = require("@discordjs/voice");
-const { VoiceManager } = require("./voice-manager");
+const { VoiceManager, isAlreadyInChannel } = require("./voice-manager");
+const { registerInstallDM } = require("./autoDM/installingAppsOnServer");
+const { commands } = require("./commands");
 
 const BOT_NAME = "MeowBot";
 const DEVELOPER_NAME = "tsukiforge";
@@ -32,14 +36,21 @@ function findVoiceChannel(guild, channelName) {
 
     if (!target) return null;
 
-    return guild.channels.cache.find((channel) => {
-        if (channel.type !== ChannelType.GuildVoice) return false;
+    const query = target.toLowerCase();
+    const voiceChannels = guild.channels.cache.filter((channel) => channel.type === ChannelType.GuildVoice);
 
-        const name = channel.name.toLowerCase();
-        const query = target.toLowerCase();
+    const exactMatch = voiceChannels.find((channel) => channel.name.toLowerCase() === query);
+    if (exactMatch) return { found: true, channel: exactMatch, multiple: false };
 
-        return name === query || name.includes(query);
-    }) || null;
+    const partialMatches = voiceChannels.filter((channel) => channel.name.toLowerCase().includes(query));
+    if (partialMatches.size === 1) {
+        return { found: true, channel: partialMatches.first(), multiple: false };
+    }
+    if (partialMatches.size > 1) {
+        return { found: false, multiple: true, channels: partialMatches.map((c) => c.name) };
+    }
+
+    return null;
 }
 
 function generateRoomCode() {
@@ -58,6 +69,16 @@ function getRoomByCode(code) {
     if (!normalizedCode) return null;
 
     return gameRooms.get(normalizedCode) ?? null;
+}
+
+function cleanupGameRooms() {
+    const now = Date.now();
+    const maxAge = 6 * 60 * 60 * 1000;
+    for (const [code, room] of gameRooms.entries()) {
+        if (now - (room.createdAt || now) > maxAge || (room.players && room.players.size === 0)) {
+            gameRooms.delete(code);
+        }
+    }
 }
 
 client.once(Events.ClientReady, async (bot) => {
@@ -79,6 +100,12 @@ client.on(Events.ShardResume, (shardId, replayedEvents) => {
     console.log(`[GATEWAY] ${new Date().toISOString()} shard ${shardId} pulih; replay ${replayedEvents} event`);
     voiceManager.reconnectTargets("gateway shard pulih").catch((error) => {
         console.error(`[ERROR] ${new Date().toISOString()} rejoin setelah gateway pulih gagal: ${error?.message ?? String(error)}`);
+    });
+});
+client.on(Events.ShardReady, (shardId) => {
+    console.log(`[GATEWAY] ${new Date().toISOString()} shard ${shardId} ready`);
+    voiceManager.reconnectTargets("gateway shard ready").catch((error) => {
+        console.error(`[ERROR] ${new Date().toISOString()} rejoin setelah shard ready gagal: ${error?.message ?? String(error)}`);
     });
 });
 client.on(Events.Error, (error) => {
@@ -182,7 +209,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         const currentStatus = voiceManager.status(guildId);
-        if (currentStatus.state === "ready" && currentStatus.channelId === currentChannel.id) {
+        const botVoiceChannelId = interaction.guild.members.me?.voice?.channelId ?? null;
+        if (isAlreadyInChannel(currentStatus, botVoiceChannelId, currentChannel.id)) {
             return interaction.reply({
                 content: `Mmm... kamu nggak lihat Meow ya? Meow sudah di sini, di **${currentChannel.name}**~ Jangan `/join` lagi, santai saja!`,
                 flags: MessageFlags.Ephemeral
@@ -213,14 +241,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.commandName === "move") {
         const channelName = interaction.options.getString("channel");
-        const targetChannel = findVoiceChannel(interaction.guild, channelName);
+        const searchResult = findVoiceChannel(interaction.guild, channelName);
 
-        if (!targetChannel) {
+        if (!searchResult) {
             return interaction.reply({
                 content: `Hmm... channel **${channelName}** belum ketemu di server ini, Meow~`,
                 flags: MessageFlags.Ephemeral
             });
         }
+        if (searchResult.multiple) {
+            const names = searchResult.channels.slice(0, 10).map((name) => `- ${name}`).join("\n");
+            return interaction.reply({
+                content: `Mmm... ada beberapa channel yang cocok dengan **${channelName}**. Bisa lebih spesifik ya?\n${names}`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+        const targetChannel = searchResult.channel;
 
         try {
             await interaction.reply({
@@ -267,7 +303,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         await interaction.reply({
             content: `${targetUser} ${text}`,
-            flags: MessageFlags.Ephemeral,
             allowedMentions: {
                 parse: [],
                 users: [targetUser.id]
@@ -297,6 +332,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.commandName === "game") {
+        cleanupGameRooms();
         const lobbyCode = interaction.options.getString("code")?.trim().toUpperCase();
         const userId = interaction.user.id;
 
@@ -319,7 +355,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 code: newCode,
                 guildId,
                 players: new Set([userId]),
-                createdBy: interaction.user.id
+                createdBy: interaction.user.id,
+                createdAt: Date.now()
             };
 
             gameRooms.set(newCode, room);
@@ -395,10 +432,31 @@ process.on("unhandledRejection", (reason) => {
 });
 process.on("uncaughtException", (error) => {
     console.error(`[ERROR] ${new Date().toISOString()} uncaught exception: ${error?.stack ?? error}`);
+    process.exit(1);
 });
 
 console.log(`[BOT] ${new Date().toISOString()} memulai proses utama`);
 console.log(generateDependencyReport());
+
+registerInstallDM(client, {
+    onGuildJoin: async (guild) => {
+        if (!process.env.CLIENT_ID) {
+            console.warn(`[AUTODM] ${new Date().toISOString()} CLIENT_ID tidak diatur; registrasi command otomatis dilewati untuk ${guild.name}`);
+            return;
+        }
+        try {
+            const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
+            const result = await rest.put(
+                Routes.applicationGuildCommands(process.env.CLIENT_ID, guild.id),
+                { body: commands }
+            );
+            console.log(`[AUTODM] ${new Date().toISOString()} ${guild.name} (${guild.id}): ${result.length} command terdaftar otomatis`);
+        } catch (error) {
+            console.error(`[AUTODM] ${new Date().toISOString()} Registrasi command otomatis untuk ${guild.name} gagal: ${error?.message ?? String(error)}`);
+        }
+    }
+});
+
 if (!process.env.DISCORD_TOKEN) {
     console.error(`[ERROR] ${new Date().toISOString()} DISCORD_TOKEN tidak diatur`);
     process.exitCode = 1;

@@ -11,6 +11,7 @@ Bot Discord ringan dan sederhana untuk server kecil. Fokus utama bot ini adalah 
 - `/say @user text` — mention user lalu kirim teks yang dimasukkan
 - `/status` — mengecek kondisi koneksi dan channel voice bot saat ini
 - `/leave` — menghentikan koneksi dan keluar dari voice channel
+- `/game [kode]` — membuat atau join room game sederhana (room kosong/kadaluarsa > 6 jam dibersihkan otomatis)
 
 ## Persyaratan
 - Node.js 22.12.0 atau lebih baru (dibutuhkan oleh versi terbaru `@discordjs/voice`)
@@ -45,7 +46,9 @@ Bot Discord ringan dan sederhana untuk server kecil. Fokus utama bot ini adalah 
    ```env
    DISCORD_TOKEN=your_discord_bot_token
    CLIENT_ID=your_application_id
+   PERSIST_TARGETS=true
    ```
+   `PERSIST_TARGETS=false` menonaktifkan penulisan `voice-targets.json` (lihat bagian "Penyimpanan target").
 
 5. Daftarkan slash command otomatis ke semua guild yang bisa diakses bot
    ```bash
@@ -68,6 +71,7 @@ Bot Discord ringan dan sederhana untuk server kecil. Fokus utama bot ini adalah 
 - `/say @user Halo`
 - `/status`
 - `/leave`
+- `/game`
 
 ## Penjelasan command
 
@@ -81,10 +85,10 @@ Menghentikan koneksi voice dan mengeluarkan bot dari channel. Bot tidak akan oto
 Menampilkan status koneksi voice dan channel yang sedang digunakan bot.
 
 ### `/move`
-Memindahkan bot ke channel voice yang sesuai berdasarkan nama channel.
+Memindahkan bot ke channel voice yang sesuai berdasarkan nama channel. Kecocokan persis (case-insensitive) diutamakan; jika ada beberapa kecocokan parsial, bot meminta nama yang lebih spesifik.
 
 ### `/say`
-Mengirim pesan dengan mention user tertentu tanpa memicu mention massal. Format dasar:
+Mengirim pesan publik di channel dengan mention user tertentu (hanya user yang disebut yang mendapat notifikasi, tanpa memicu mention massal). Format dasar:
 ```bash
 /say @user Halo semuanya
 ```
@@ -95,6 +99,7 @@ Mengirim pesan dengan mention user tertentu tanpa memicu mention massal. Format 
 3. Set variabel environment di Wispbyte:
    - `DISCORD_TOKEN`
    - `CLIENT_ID`
+   - `PERSIST_TARGETS` (opsional, default `true`)
 4. Jalankan perintah install secara manual jika diperlukan:
    ```bash
    npm install
@@ -112,10 +117,22 @@ Mengirim pesan dengan mention user tertentu tanpa memicu mention massal. Format 
 ## Voice standby dan pemulihan
 - `/join` menyimpan target channel dan menyambungkan bot atas permintaan manual. Setelah proses restart, bot otomatis mencoba masuk kembali ke target tersimpan jika `AUTO_REJOIN_ON_START=true`.
 - `/move` mengganti target dan mencoba koneksi atas permintaan manual; `/leave` memutus koneksi serta menghapus target tersimpan.
-- Jika koneksi voice terputus tanpa disengaja, bot mencoba recovery tanpa batas dengan backoff 2, 5, 10, dan 30 detik, lalu setiap 60 detik. Sebelum koneksi baru dibuat, koneksi lama dihancurkan; hanya satu recovery aktif per guild. Target yang sudah dihapus, channel yang tidak valid, atau izin yang hilang akan menghentikan standby dan menghapus target.
-- Watchdog setiap 60 detik memeriksa semua target tersimpan dan memulai recovery jika koneksi tidak ada atau belum `Ready`. Setelah gateway shard resume, bot juga langsung memeriksa serta mencoba menyambungkan kembali target yang belum `Ready`.
+- Jika koneksi voice terputus tanpa disengaja (termasuk bot di-disconnect manual lewat Discord), bot menunggu 5 detik apakah koneksi pulih sendiri; jika tidak, bot membuat koneksi baru dan mencoba recovery tanpa batas dengan backoff 2, 5, 10, dan 30 detik, lalu setiap 60 detik. Hanya satu recovery aktif per guild. Target hanya dihapus saat: channel benar-benar dihapus, guild mengeluarkan bot, atau user menjalankan `/leave`. Kehilangan izin View Channel/Connect sementara, error API, atau gangguan jaringan TIDAK menghapus target — bot tetap mencoba kembali sampai berhasil.
+- Watchdog setiap 60 detik memeriksa semua target tersimpan dan memulai recovery jika koneksi tidak ada atau belum `Ready`. Setelah gateway shard siap (`ShardReady`) atau resume (`ShardResume`), bot juga langsung memeriksa serta mencoba menyambungkan kembali target yang belum `Ready`.
+- `/join` saat bot sudah berada di channel yang sama (bahkan sebelum status `Ready`) akan menjawab "sudah di sini" dan tidak membongkar koneksi. Spam `/join` tidak membuat bot keluar-masuk sendiri.
+- `uncaughtException` menyebabkan proses keluar (`process.exit(1)`) agar host merestart bot dan target di-restore dari `voice-targets.json`.
 - Set `AUTO_REJOIN_ON_START=false` untuk menunda percobaan koneksi awal setelah proses dimulai; watchdog tetap akan memeriksa target tersimpan dan dapat memulai koneksi dalam waktu paling lama sekitar 60 detik.
 - Log `[NET]` menampilkan tahap jaringan voice serta error/close code websocket. Jika log terus macet pada tahap UDP handshake, kemungkinan besar trafik UDP diblokir oleh hosting; hal ini tidak dapat diperbaiki dari kode dan perlu ditanyakan ke penyedia hosting.
+
+## Penyimpanan target dan `PERSIST_TARGETS`
+- Default (`PERSIST_TARGETS=true` atau tidak diatur): target standby disimpan di `voice-targets.json` berisi hanya `[{guildId, channelId}]` (tanpa token/data pribadi). File ini dan `*.tmp`-nya sudah masuk `.gitignore`. Guild ID dideteksi otomatis dari interaksi/event — tidak ada konfigurasi manual.
+- `PERSIST_TARGETS=false`: tidak ada file yang ditulis sama sekali. Target hanya hidup di memori proses. Saat gateway pulih (`ShardReady`/`ShardResume`) dan setiap siklus watchdog, bot mengadopsi channel voice tempatnya berada (jika belum ada target) sebagai target di memori. Trade-off: setelah proses restart (Wispbyte sering restart), bot tidak tahu harus kembali ke room mana sampai user menjalankan `/join` lagi.
+
+## autoDM dan registrasi command otomatis di server baru
+- Saat bot ditambahkan ke server baru (`GuildCreate`), bot mengirim DM sambutan ke **admin yang menambahkan bot**, diambil dari audit log `BotAdd`. Fallback jika audit log tidak bisa dibaca atau tidak ditemukan: owner server. Fallback terakhir jika DM tertutup (error 50007): system channel server.
+- Membaca audit log membutuhkan permission **View Audit Log** untuk role bot pada link undangan (contoh: `...?permissions=...&scope=bot%20applications.commands`). Tanpa izin itu, DM jatuh ke owner server. Tidak ada intent privileged tambahan yang dibutuhkan.
+- Pada `GuildCreate` yang sama, bot otomatis mendaftarkan slash command ke guild baru (butuh env `CLIENT_ID`; jika kosong, proses dilewati dengan log warning). Daftar command dibagikan dari `commands.js` sehingga tidak duplikasi dengan `deploy-commands.js`.
+- `autoDM/installingAppsOnServer.js` kini module (`registerInstallDM`) yang di-import `index.js` sebelum `client.login`; tidak ada proses/login client tambahan.
 - `/status` menampilkan keadaan koneksi aktual, target, dan apakah upaya koneksi atau recovery sedang berjalan. Status proses yang benar-benar mati hanya bisa dipastikan dari panel/log hosting, bukan melalui slash command.
 - `/leave` menghapus target, membatalkan timer recovery guild tersebut, dan menghentikan watchdog saat tidak ada target tersisa. Bot tidak akan masuk kembali ke channel tersebut sampai `/join` atau `/move` dijalankan lagi.
 - Bot tidak menjamin uptime 100%. Pemulihan bergantung pada Discord, izin bot, ketersediaan filesystem target, dan konfigurasi restart Wispbyte.
