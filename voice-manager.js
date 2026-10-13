@@ -24,6 +24,9 @@ class VoiceManager {
             VoiceConnectionStatus
         };
         this.readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS;
+        this.retryDelaysMs = options.retryDelaysMs ?? [1000, 2000, 5000, 10000];
+        this.setTimer = options.setTimeout ?? setTimeout;
+        this.clearTimer = options.clearTimeout ?? clearTimeout;
         this.entries = new Map();
         this.closed = false;
         this.storePath = options.storePath ?? path.join(process.cwd(), "voice-targets.json");
@@ -107,6 +110,8 @@ class VoiceManager {
             reconnecting: false,
             failed: false,
             inFlight: null,
+            retryTimer: null,
+            retryIndex: 0,
             generation: 0,
             lastError: null
         };
@@ -115,7 +120,12 @@ class VoiceManager {
     async setTarget(guildId, channelId) {
         if (this.closed) throw new Error("Pengelola voice sedang dihentikan");
         const oldEntry = this.entries.get(guildId);
-        if (oldEntry?.channelId === channelId) return this.attempt(oldEntry, "target yang sama diminta kembali");
+        if (oldEntry?.channelId === channelId) {
+            this.cancelRecovery(oldEntry);
+            oldEntry.failed = false;
+            oldEntry.retryIndex = 0;
+            return this.attempt(oldEntry, "target yang sama diminta kembali");
+        }
         if (oldEntry) this.disposeEntry(oldEntry, true);
 
         const entry = this.createEntry(guildId, channelId);
@@ -150,14 +160,14 @@ class VoiceManager {
         return {
             state: connectionStatus === this.voice.VoiceConnectionStatus.Ready && connectionMatchesTarget
                 ? "ready"
-                : entry.failed
-                    ? "failed"
-                    : entry.reconnecting || Boolean(entry.inFlight)
+                : entry.reconnecting || Boolean(entry.inFlight) || Boolean(entry.retryTimer)
                         ? "connecting"
-                        : "disconnected",
+                        : entry.failed
+                            ? "failed"
+                            : "disconnected",
             connectionStatus,
             channelId: entry.channelId,
-            connecting: entry.reconnecting || Boolean(entry.inFlight),
+            connecting: entry.reconnecting || Boolean(entry.inFlight) || Boolean(entry.retryTimer),
             reconnecting: false,
             lastError: entry.lastError
         };
@@ -227,6 +237,9 @@ class VoiceManager {
                 if (this.entries.get(entry.guildId) === entry && generation === entry.generation) {
                     entry.reconnecting = false;
                     if (!result.ready && !result.cancelled) entry.failed = true;
+                    if (!result.ready && !result.cancelled && !result.invalid) {
+                        this.scheduleRecovery(entry);
+                    }
                 }
                 return result;
             });
@@ -315,16 +328,22 @@ class VoiceManager {
                     entry.failed = true;
                     entry.reconnecting = false;
                     entry.lastError = `Koneksi ${newState.status}; jalankan /join untuk menyambungkan kembali`;
-                    this.log(`Guild ${entry.guildId} terputus; tidak ada reconnect otomatis, perlu /join`);
+                    this.log(`Guild ${entry.guildId} terputus; recovery terjadwal`);
                     if (newState.status === this.voice.VoiceConnectionStatus.Disconnected) {
                         this.detachConnection(entry, connection, true);
                     }
+                    this.scheduleRecovery(entry);
                 }
             }
         };
         const onError = (error) => {
             this.errorLog(`Voice connection guild ${entry.guildId}`, error);
             entry.lastError = error.message;
+            if (this.entries.get(entry.guildId) === entry && !entry.inFlight &&
+                connection.state.status !== this.voice.VoiceConnectionStatus.Ready) {
+                entry.failed = true;
+                this.scheduleRecovery(entry);
+            }
         };
         connection.on("stateChange", onStateChange);
         connection.on("error", onError);
@@ -355,9 +374,37 @@ class VoiceManager {
 
     disposeEntry(entry, destroyConnection) {
         entry.generation += 1;
+        this.cancelRecovery(entry);
         const connection = entry.connection ?? this.voice.getVoiceConnection(entry.guildId);
         if (connection) this.detachConnection(entry, connection, destroyConnection);
         entry.reconnecting = false;
+    }
+
+    cancelRecovery(entry) {
+        if (entry.retryTimer) {
+            this.clearTimer(entry.retryTimer);
+            entry.retryTimer = null;
+        }
+    }
+
+    scheduleRecovery(entry) {
+        if (this.closed || this.entries.get(entry.guildId) !== entry || entry.retryTimer || entry.inFlight) return;
+        const delay = this.retryDelaysMs[entry.retryIndex];
+        if (delay === undefined) {
+            entry.reconnecting = false;
+            return;
+        }
+
+        entry.retryIndex += 1;
+        entry.reconnecting = true;
+        entry.retryTimer = this.setTimer(() => {
+            entry.retryTimer = null;
+            if (this.entries.get(entry.guildId) !== entry || this.closed) return;
+            this.attempt(entry, `recovery otomatis percobaan ${entry.retryIndex}`).catch((error) => {
+                this.errorLog(`Recovery voice guild ${entry.guildId}`, error);
+            });
+        }, delay);
+        this.log(`Guild ${entry.guildId} recovery dijadwalkan dalam ${delay}ms`);
     }
 
     async onChannelDeleted(channel) {

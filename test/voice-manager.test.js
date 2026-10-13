@@ -119,40 +119,62 @@ function createHarness({ readiness = [], allowed = true, storedTargets = [] } = 
             assert.ok(timer, "expected a scheduled retry");
             timers.delete(timer);
             timer.callback();
+            const entry = manager.entries.get("guild-1");
+            if (entry?.inFlight) await entry.inFlight;
             await new Promise((resolve) => setImmediate(resolve));
             await new Promise((resolve) => setImmediate(resolve));
         }
     };
 }
 
-test("disconnect events never reconnect automatically; /join connects manually", async () => {
+test("disconnect schedules one controlled recovery without duplicate connections", async () => {
     const harness = createHarness();
     await harness.manager.setTarget("guild-1", "channel-1");
     const connection = harness.manager.entries.get("guild-1").connection;
     connection.transition("disconnected");
 
     assert.equal(harness.joinCalls, 1);
-    assert.equal(harness.manager.status("guild-1").state, "failed");
-    assert.equal(harness.timers.size, 0);
+    assert.equal(harness.manager.status("guild-1").state, "connecting");
+    assert.equal(harness.timers.size, 1);
 
-    const manualJoin = await harness.manager.setTarget("guild-1", "channel-1");
+    await harness.runNextTimer();
 
-    assert.equal(manualJoin.ready, true);
+    assert.equal(harness.manager.status("guild-1").state, "ready");
     assert.equal(harness.joinCalls, 2);
+    assert.equal(harness.timers.size, 0);
     await harness.manager.close();
 });
 
-test("failed connection attempt stays failed until another manual /join", async () => {
-    const harness = createHarness({ readiness: [false, true] });
+test("failed recovery attempts use bounded backoff and eventually stop", async () => {
+    const harness = createHarness({ readiness: [false, false, false, false, false] });
     const first = await harness.manager.setTarget("guild-1", "channel-1");
     assert.equal(first.ready, false);
-    assert.equal(harness.manager.status("guild-1").state, "failed");
+    assert.equal(harness.manager.status("guild-1").state, "connecting");
+    assert.equal(harness.timers.size, 1);
+
+    await harness.runNextTimer();
+    await harness.runNextTimer();
+    await harness.runNextTimer();
+
+    assert.equal(harness.joinCalls, 4);
     assert.equal(harness.timers.size, 0);
+    assert.equal(harness.manager.status("guild-1").state, "failed");
+    await harness.manager.close();
+});
 
-    const manualJoin = await harness.manager.setTarget("guild-1", "channel-1");
+test("leave cancels pending recovery and join starts a new session", async () => {
+    const harness = createHarness();
+    await harness.manager.setTarget("guild-1", "channel-1");
+    harness.manager.entries.get("guild-1").connection.transition("disconnected");
 
-    assert.equal(manualJoin.ready, true);
-    assert.equal(harness.manager.status("guild-1").state, "ready");
+    assert.equal(harness.timers.size, 1);
+    await harness.manager.leave("guild-1");
+    assert.equal(harness.timers.size, 0);
+    assert.equal(harness.manager.status("guild-1").state, "no-target");
+
+    const joined = await harness.manager.setTarget("guild-1", "channel-1");
+    assert.equal(joined.ready, true);
+    assert.equal(harness.joinCalls, 2);
     await harness.manager.close();
 });
 

@@ -113,8 +113,9 @@ Mengirim pesan dengan mention user tertentu tanpa memicu mention massal. Format 
 ## Voice standby dan pemulihan
 - `/join` menyimpan target channel dan menyambungkan bot atas permintaan manual. Jika proses restart, jalankan `/join` lagi; target tersimpan hanya membantu mempertahankan pilihan channel.
 - `/move` mengganti target dan mencoba koneksi atas permintaan manual; `/leave` memutus koneksi serta menghapus target tersimpan.
-- Jika koneksi voice terputus atau upaya koneksi gagal, bot tidak mencoba lagi otomatis. Jalankan `/join` atau `/move` secara manual untuk menyambungkan kembali. Channel yang tidak tersedia atau tidak memiliki izin tidak digunakan.
-- `/status` menampilkan keadaan koneksi aktual, target, dan apakah upaya manual sedang berjalan. Status proses yang benar-benar mati hanya bisa dipastikan dari panel/log hosting, bukan melalui slash command.
+- Jika koneksi voice terputus tanpa disengaja, bot menjalankan Fast Recovery dengan retry terbatas dan backoff pendek. Recovery tidak membuat koneksi ganda, memvalidasi ulang guild/channel/izin, dan berhenti setelah seluruh percobaan gagal. Jalankan `/join` atau `/move` untuk memulai sesi manual baru setelah itu. Channel yang tidak tersedia atau tidak memiliki izin tidak digunakan.
+- `/status` menampilkan keadaan koneksi aktual, target, dan apakah upaya koneksi atau recovery sedang berjalan. Status proses yang benar-benar mati hanya bisa dipastikan dari panel/log hosting, bukan melalui slash command.
+- `/leave` membatalkan timer serta seluruh upaya recovery yang tertunda. Bot tidak akan masuk kembali ke voice channel sampai `/join` atau `/move` dijalankan lagi.
 - Bot tidak menjamin uptime 100%. Pemulihan bergantung pada Discord, izin bot, ketersediaan filesystem target, dan konfigurasi restart Wispbyte.
 
 Jalankan tes logika koneksi dengan `npm test`.
