@@ -11,7 +11,9 @@ const {
     VoiceConnectionStatus
 } = require("@discordjs/voice");
 
-const READY_TIMEOUT_MS = 15000;
+const READY_TIMEOUT_MS = 20000;
+const WATCHDOG_INTERVAL_MS = 60000;
+const DEFAULT_RETRY_DELAYS_MS = [2000, 5000, 10000, 30000, 60000];
 
 class VoiceManager {
     constructor(client, options = {}) {
@@ -24,11 +26,14 @@ class VoiceManager {
             VoiceConnectionStatus
         };
         this.readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS;
-        this.retryDelaysMs = options.retryDelaysMs ?? [1000, 2000, 5000, 10000];
+        this.retryDelaysMs = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
         this.setTimer = options.setTimeout ?? setTimeout;
         this.clearTimer = options.clearTimeout ?? clearTimeout;
+        this.setInterval = options.setInterval ?? setInterval;
+        this.clearInterval = options.clearInterval ?? clearInterval;
         this.entries = new Map();
         this.closed = false;
+        this.watchdogTimer = null;
         this.storePath = options.storePath ?? path.join(process.cwd(), "voice-targets.json");
         this.storage = options.storage ?? {
             load: () => this.readTargets(),
@@ -97,6 +102,7 @@ class VoiceManager {
             if (!target?.guildId || !target?.channelId || this.closed) continue;
             const entry = this.createEntry(target.guildId, target.channelId);
             this.entries.set(entry.guildId, entry);
+            this.ensureWatchdog();
             if (autoReconnect) {
                 this.logger.log(`[TARGET] ${new Date().toISOString()} Target ${entry.channelId} guild ${entry.guildId} dimuat; auto-rejoin dimulai`);
                 const result = await this.attempt(entry, "pemulihan setelah restart");
@@ -140,6 +146,7 @@ class VoiceManager {
 
         const entry = this.createEntry(guildId, channelId);
         this.entries.set(guildId, entry);
+        this.ensureWatchdog();
         this.persistTargets();
         this.logger.log(`[TARGET] ${new Date().toISOString()} Guild ${guildId} diarahkan ke channel ${channelId}`);
         return this.attempt(entry, "target dipilih pengguna");
@@ -156,6 +163,7 @@ class VoiceManager {
                 connection.destroy();
             }
         }
+        if (this.entries.size === 0) this.stopWatchdog();
         this.persistTargets();
         this.logger.log(`[TARGET] ${new Date().toISOString()} Standby guild ${guildId} dinonaktifkan oleh pengguna`);
     }
@@ -178,9 +186,53 @@ class VoiceManager {
             connectionStatus,
             channelId: entry.channelId,
             connecting: entry.reconnecting || Boolean(entry.inFlight) || Boolean(entry.retryTimer),
-            reconnecting: false,
+            reconnecting: entry.reconnecting,
             lastError: entry.lastError
         };
+    }
+
+    ensureWatchdog() {
+        if (this.watchdogTimer || this.closed || this.entries.size === 0) return;
+        this.watchdogTimer = this.setInterval(() => {
+            this.checkTargets().catch((error) => {
+                this.errorLog("Watchdog voice gagal memeriksa target", error);
+            });
+        }, WATCHDOG_INTERVAL_MS);
+        this.watchdogTimer.unref?.();
+    }
+
+    stopWatchdog() {
+        if (!this.watchdogTimer) return;
+        this.clearInterval(this.watchdogTimer);
+        this.watchdogTimer = null;
+    }
+
+    async checkTargets() {
+        if (this.closed) return;
+        const attempts = [];
+        for (const entry of this.entries.values()) {
+            if (this.entries.get(entry.guildId) !== entry || entry.inFlight || entry.retryTimer) continue;
+            const connection = this.voice.getVoiceConnection(entry.guildId);
+            if (connection?.state?.status === this.voice.VoiceConnectionStatus.Ready &&
+                connection.joinConfig?.channelId === entry.channelId) continue;
+            attempts.push(this.attempt(entry, "watchdog mendeteksi koneksi tidak Ready"));
+        }
+        await Promise.all(attempts);
+    }
+
+    async reconnectTargets(reason = "gateway pulih") {
+        if (this.closed) return;
+        const attempts = [];
+        for (const entry of this.entries.values()) {
+            if (entry.inFlight) continue;
+            this.cancelRecovery(entry);
+            entry.reconnecting = false;
+            const connection = this.voice.getVoiceConnection(entry.guildId);
+            if (connection?.state?.status === this.voice.VoiceConnectionStatus.Ready &&
+                connection.joinConfig?.channelId === entry.channelId) continue;
+            attempts.push(this.attempt(entry, reason));
+        }
+        await Promise.all(attempts);
     }
 
     async getValidTarget(entry) {
@@ -229,6 +281,7 @@ class VoiceManager {
         if (this.entries.get(entry.guildId) !== entry) return;
         this.entries.delete(entry.guildId);
         this.disposeEntry(entry, true);
+        if (this.entries.size === 0) this.stopWatchdog();
         this.persistTargets();
         this.logger.error(`[TARGET] ${new Date().toISOString()} Target ${entry.channelId} guild ${entry.guildId} dihentikan: ${reason}`);
     }
@@ -262,7 +315,7 @@ class VoiceManager {
             const target = await this.getValidTarget(entry);
             if (!target || !this.isCurrent(entry, generation)) return { ready: false, invalid: true };
 
-            let connection = entry.connection ?? this.voice.getVoiceConnection(entry.guildId);
+            let connection = this.voice.getVoiceConnection(entry.guildId) ?? entry.connection;
             const connectionMatchesTarget = connection?.joinConfig?.channelId === entry.channelId;
             if (connection?.state.status === this.voice.VoiceConnectionStatus.Ready && connectionMatchesTarget) {
                 entry.connection = connection;
@@ -271,31 +324,13 @@ class VoiceManager {
                 return { ready: true };
             }
 
-            if (connection && connectionMatchesTarget && connection.state.status !== this.voice.VoiceConnectionStatus.Destroyed) {
-                entry.connection = connection;
-                this.attachConnection(entry, connection);
-            }
-
-            if (connection && connectionMatchesTarget && [
-                this.voice.VoiceConnectionStatus.Connecting,
-                this.voice.VoiceConnectionStatus.Signalling
-            ].includes(connection.state.status)) {
-                try {
-                    await this.voice.entersState(connection, this.voice.VoiceConnectionStatus.Ready, this.readyTimeoutMs);
-                    if (this.isCurrent(entry, generation)) {
-                        entry.connection = connection;
-                        this.markReady(entry, "koneksi mencapai Ready");
-                        return { ready: true };
-                    }
-                    return { ready: false, cancelled: true };
-                } catch (error) {
-                    entry.lastError = error.message;
-                    this.connectionLog(`Koneksi ${connection.state.status} tidak mencapai Ready; percobaan manual membuat koneksi baru`);
-                }
-            }
-
             if (!this.isCurrent(entry, generation)) return { ready: false, cancelled: true };
-            if (connection) this.detachConnection(entry, connection, true);
+            const registeredConnection = this.voice.getVoiceConnection(entry.guildId);
+            const connectionsToDestroy = new Set([registeredConnection, entry.connection].filter(Boolean));
+            for (const oldConnection of connectionsToDestroy) {
+                this.detachConnection(entry, oldConnection, false);
+                if (oldConnection.state.status !== this.voice.VoiceConnectionStatus.Destroyed) oldConnection.destroy();
+            }
             connection = this.voice.joinVoiceChannel({
                 channelId: target.channel.id,
                 guildId: entry.guildId,
@@ -330,6 +365,7 @@ class VoiceManager {
         if (entry.listeners) this.detachConnection(entry, entry.listeners.connection, false);
         const onStateChange = (oldState, newState) => {
             this.log(`Guild ${entry.guildId} ${oldState.status} -> ${newState.status}`);
+            syncNetworking(newState);
             if (newState.status === this.voice.VoiceConnectionStatus.Ready) {
                 this.markReady(entry, "event Ready");
             } else if (newState.status === this.voice.VoiceConnectionStatus.Disconnected ||
@@ -337,7 +373,7 @@ class VoiceManager {
                 if (this.entries.get(entry.guildId) === entry && !entry.inFlight) {
                     entry.failed = true;
                     entry.reconnecting = false;
-                    entry.lastError = `Koneksi ${newState.status}; jalankan /join untuk menyambungkan kembali`;
+                    entry.lastError = `Koneksi ${newState.status}; recovery otomatis berjalan`;
                     this.log(`Guild ${entry.guildId} terputus; recovery terjadwal`);
                     if (newState.status === this.voice.VoiceConnectionStatus.Disconnected) {
                         this.detachConnection(entry, connection, true);
@@ -355,9 +391,69 @@ class VoiceManager {
                 this.scheduleRecovery(entry);
             }
         };
+        let networking = null;
+        let networkingStateChange = null;
+        let networkingError = null;
+        let networkingClose = null;
+        let websocket = null;
+        let websocketClose = null;
+        const syncWebsocket = (state) => {
+            const nextWebsocket = Reflect.get(state ?? {}, "ws");
+            if (websocket === nextWebsocket) return;
+            if (websocket && websocketClose) websocket.off("close", websocketClose);
+            websocket = nextWebsocket;
+            websocketClose = websocket ? (code) => {
+                this.logger.warn(`[NET] ${new Date().toISOString()} Guild ${entry.guildId} voice websocket closed; code ${code}`);
+            } : null;
+            websocket?.on("close", websocketClose);
+        };
+        const syncNetworking = (state) => {
+            const nextNetworking = Reflect.get(state ?? {}, "networking");
+            if (networking !== nextNetworking) {
+                if (networking) {
+                    networking.off("stateChange", networkingStateChange);
+                    networking.off("error", networkingError);
+                    networking.off("close", networkingClose);
+                }
+                networking = nextNetworking;
+                networkingStateChange = networking ? (oldNetworkState, newNetworkState) => {
+                    this.logger.log(`[NET] ${new Date().toISOString()} Guild ${entry.guildId} ${oldNetworkState.code ?? oldNetworkState.status} -> ${newNetworkState.code ?? newNetworkState.status}`);
+                    syncWebsocket(newNetworkState);
+                } : null;
+                networkingError = networking ? (error) => {
+                    this.logger.error(`[NET] ${new Date().toISOString()} Guild ${entry.guildId} networking error: ${error?.message ?? String(error)}`);
+                } : null;
+                networkingClose = networking ? (code) => {
+                    this.logger.warn(`[NET] ${new Date().toISOString()} Guild ${entry.guildId} voice networking closed; code ${code}`);
+                } : null;
+                networking?.on("stateChange", networkingStateChange);
+                networking?.on("error", networkingError);
+                networking?.on("close", networkingClose);
+                if (networking) {
+                    const networkState = networking.state;
+                    this.logger.log(`[NET] ${new Date().toISOString()} Guild ${entry.guildId} networking ${networkState.code ?? networkState.status}`);
+                    syncWebsocket(networkState);
+                } else {
+                    syncWebsocket(null);
+                }
+            } else if (networking) {
+                syncWebsocket(networking.state);
+            }
+        };
         connection.on("stateChange", onStateChange);
         connection.on("error", onError);
-        entry.listeners = { connection, onStateChange, onError };
+        syncNetworking(connection.state);
+        entry.listeners = {
+            connection,
+            onStateChange,
+            onError,
+            get networking() { return networking; },
+            get networkingStateChange() { return networkingStateChange; },
+            get networkingError() { return networkingError; },
+            get networkingClose() { return networkingClose; },
+            get websocket() { return websocket; },
+            get websocketClose() { return websocketClose; }
+        };
     }
 
     detachConnection(entry, connection, destroy) {
@@ -366,6 +462,10 @@ class VoiceManager {
         if (listeners?.connection === connection) {
             connection.off("stateChange", listeners.onStateChange);
             connection.off("error", listeners.onError);
+            listeners.networking?.off("stateChange", listeners.networkingStateChange);
+            listeners.networking?.off("error", listeners.networkingError);
+            listeners.networking?.off("close", listeners.networkingClose);
+            listeners.websocket?.off("close", listeners.websocketClose);
             entry.listeners = null;
         }
         if (destroy && connection.state.status !== this.voice.VoiceConnectionStatus.Destroyed) {
@@ -378,6 +478,8 @@ class VoiceManager {
         if (this.entries.get(entry.guildId) !== entry) return;
         entry.failed = false;
         entry.reconnecting = false;
+        entry.retryIndex = 0;
+        this.cancelRecovery(entry);
         entry.lastError = null;
         this.connectionLog(`${reason}; guild ${entry.guildId} terhubung ke ${entry.channelId}`);
     }
@@ -399,12 +501,12 @@ class VoiceManager {
 
     scheduleRecovery(entry) {
         if (this.closed || this.entries.get(entry.guildId) !== entry || entry.retryTimer || entry.inFlight) return;
-        const delay = this.retryDelaysMs[entry.retryIndex];
-        if (delay === undefined) {
+        if (this.retryDelaysMs.length === 0) {
             entry.reconnecting = false;
             return;
         }
 
+        const delay = this.retryDelaysMs[Math.min(entry.retryIndex, this.retryDelaysMs.length - 1)];
         entry.retryIndex += 1;
         entry.reconnecting = true;
         entry.retryTimer = this.setTimer(() => {
@@ -414,6 +516,7 @@ class VoiceManager {
                 this.errorLog(`Recovery voice guild ${entry.guildId}`, error);
             });
         }, delay);
+        entry.retryTimer.unref?.();
         this.log(`Guild ${entry.guildId} recovery dijadwalkan dalam ${delay}ms`);
     }
 
@@ -444,6 +547,7 @@ class VoiceManager {
 
     async close() {
         this.closed = true;
+        this.stopWatchdog();
         for (const entry of this.entries.values()) this.disposeEntry(entry, true);
     }
 }

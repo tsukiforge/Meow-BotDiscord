@@ -4,8 +4,10 @@ const {
     Client,
     GatewayIntentBits,
     Events,
-    ChannelType
+    ChannelType,
+    MessageFlags
 } = require("discord.js");
+const { generateDependencyReport } = require("@discordjs/voice");
 const { VoiceManager } = require("./voice-manager");
 
 const BOT_NAME = "MeowBot";
@@ -75,6 +77,9 @@ client.on(Events.ShardReconnecting, (shardId) => {
 });
 client.on(Events.ShardResume, (shardId, replayedEvents) => {
     console.log(`[GATEWAY] ${new Date().toISOString()} shard ${shardId} pulih; replay ${replayedEvents} event`);
+    voiceManager.reconnectTargets("gateway shard pulih").catch((error) => {
+        console.error(`[ERROR] ${new Date().toISOString()} rejoin setelah gateway pulih gagal: ${error?.message ?? String(error)}`);
+    });
 });
 client.on(Events.Error, (error) => {
     console.error(`[ERROR] ${new Date().toISOString()} Discord client: ${error?.message ?? String(error)}`);
@@ -115,7 +120,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!guildId) {
         return interaction.reply({
             content: "Mmm... command ini hanya bisa dipakai di server ya, Meow~",
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
     }
 
@@ -133,14 +138,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 "- `/leave` — minta Meow keluar dari voice channel",
                 "- `/game [kode]` — buat atau join room game"
             ].join("\n"),
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
     }
 
     if (interaction.commandName === "ping") {
         return interaction.reply({
             content: "🏓 Pong~ Meow masih menyala dan siap membantu!",
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
     }
 
@@ -156,7 +161,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 "",
                 "**Command utama:** `/join`, `/help`, `/ping`, `/move`, `/status`, `/say`, `/about`, `/leave`, `/game`"
             ].join("\n"),
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
     }
 
@@ -172,7 +177,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!currentChannel || currentChannel.type !== ChannelType.GuildVoice) {
             return interaction.reply({
                 content: "Eh~ Meow belum melihat kamu di Voice Channel. Masuk dulu ke channel voice, lalu coba `/join` lagi ya.",
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
 
@@ -180,14 +185,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (currentStatus.state === "ready" && currentStatus.channelId === currentChannel.id) {
             return interaction.reply({
                 content: `Mmm... kamu nggak lihat Meow ya? Meow sudah di sini, di **${currentChannel.name}**~ Jangan `/join` lagi, santai saja!`,
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
 
         try {
             await interaction.reply({
                 content: "Mmm... Meow sedang masuk ke Voice Channel, tunggu sebentar ya~",
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
             const result = await voiceManager.setTarget(guildId, currentChannel.id);
             if (result.invalid) {
@@ -200,7 +205,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } catch (error) {
             console.error(`[ERROR] ${new Date().toISOString()} /join guild ${guildId}: ${error?.message ?? String(error)}`);
             if (interaction.replied || interaction.deferred) await interaction.editReply("Aduh~ Meow gagal masuk ke Voice Channel. Coba `/join` lagi ya.");
-            else await interaction.reply({ content: "Aduh~ Meow gagal masuk ke Voice Channel. Coba `/join` lagi ya.", ephemeral: true });
+            else await interaction.reply({ content: "Aduh~ Meow gagal masuk ke Voice Channel. Coba `/join` lagi ya.", flags: MessageFlags.Ephemeral });
         }
 
         return;
@@ -213,14 +218,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!targetChannel) {
             return interaction.reply({
                 content: `Hmm... channel **${channelName}** belum ketemu di server ini, Meow~`,
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
 
         try {
             await interaction.reply({
                 content: "Mmm... Meow sedang pindah Voice Channel dulu ya~",
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
             const result = await voiceManager.setTarget(guildId, targetChannel.id);
             if (result.invalid) {
@@ -234,7 +239,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         } catch (error) {
             console.error(`[ERROR] ${new Date().toISOString()} /move guild ${guildId}: ${error?.message ?? String(error)}`);
             if (interaction.replied || interaction.deferred) await interaction.editReply("Aduh~ Meow gagal pindah Voice Channel. Coba `/move` lagi ya.");
-            else await interaction.reply({ content: "Aduh~ Meow gagal pindah Voice Channel. Coba `/move` lagi ya.", ephemeral: true });
+            else await interaction.reply({ content: "Aduh~ Meow gagal pindah Voice Channel. Coba `/move` lagi ya.", flags: MessageFlags.Ephemeral });
         }
 
         return;
@@ -244,7 +249,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         await voiceManager.leave(guildId);
         await interaction.reply({
             content: "Oke~ Meow sudah keluar dari Voice Channel. Kalau mau masuk lagi, panggil `/join` ya!",
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
         return;
     }
@@ -256,13 +261,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!targetUser || !text) {
             return interaction.reply({
                 content: "Mmm... formatnya `/say @user text` ya. Pilih user dan isi pesannya dulu~",
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
 
         await interaction.reply({
             content: `${targetUser} ${text}`,
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
             allowedMentions: {
                 parse: [],
                 users: [targetUser.id]
@@ -275,7 +280,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "status") {
         const status = voiceManager.status(guildId);
         if (status.state === "no-target") {
-            return interaction.reply({ content: "Mmm... Meow belum punya target standby. Gunakan `/join` saat kamu ada di Voice Channel, atau `/move` untuk memilih channel.", ephemeral: true });
+            return interaction.reply({ content: "Mmm... Meow belum punya target standby. Gunakan `/join` saat kamu ada di Voice Channel, atau `/move` untuk memilih channel.", flags: MessageFlags.Ephemeral });
         }
         const channel = interaction.guild.channels.cache.get(status.channelId) ??
             await interaction.guild.channels.fetch(status.channelId).catch(() => null);
@@ -287,7 +292,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }[status.state];
         return interaction.reply({
             content: `${label ?? "⚪ Status tidak diketahui"}\n📡 Status koneksi: **${status.connectionStatus}**\n🎙️ Target: **${channel?.name ?? status.channelId}**\n🛠️ Upaya koneksi/recovery berjalan: **${status.connecting ? "Ya" : "Tidak"}**${status.lastError ? `\n⚠️ Keterangan: ${status.lastError}` : ""}`,
-            ephemeral: true
+            flags: MessageFlags.Ephemeral
         });
     }
 
@@ -301,7 +306,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             if (currentRoom) {
                 return interaction.reply({
                     content: `Mmm... kamu sudah ada di room **${currentRoom.code}**. Gunakan /game code:${currentRoom.code} untuk cek room itu ya~`,
-                    ephemeral: true
+                    flags: MessageFlags.Ephemeral
                 });
             }
 
@@ -321,7 +326,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
             return interaction.reply({
                 content: `Yay~ room game baru sudah dibuat!\nKode room: **${newCode}**\nPemain: 1/6\nGunakan /game code:${newCode} untuk ikut join ya~`,
-                ephemeral: true,
+                flags: MessageFlags.Ephemeral,
                 allowedMentions: { parse: [] }
             });
         }
@@ -331,28 +336,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (!targetRoom) {
             return interaction.reply({
                 content: `Hmm... room **${lobbyCode}** belum ketemu. Buat room baru dengan /game ya~`,
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
 
         if (targetRoom.guildId !== guildId) {
             return interaction.reply({
                 content: "Aduh~ kode room ini bukan untuk server ini ya.",
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
 
         if (targetRoom.players.has(userId)) {
             return interaction.reply({
                 content: `Mmm... kamu sudah ada di room **${targetRoom.code}** kok~`,
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
 
         if (targetRoom.players.size >= MAX_GAME_ROOM_PLAYERS) {
             return interaction.reply({
                 content: `Aduh~ room **${targetRoom.code}** sudah penuh, maksimal ${MAX_GAME_ROOM_PLAYERS} pemain ya.`,
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
 
@@ -360,7 +365,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         return interaction.reply({
             content: `Yay~ kamu berhasil join room **${targetRoom.code}**!\nPemain sekarang: **${targetRoom.players.size}/${MAX_GAME_ROOM_PLAYERS}**`,
-            ephemeral: true,
+            flags: MessageFlags.Ephemeral,
             allowedMentions: { parse: [] }
         });
     }
@@ -388,8 +393,12 @@ process.once("SIGTERM", () => shutdown("SIGTERM").catch((error) => {
 process.on("unhandledRejection", (reason) => {
     console.error(`[ERROR] ${new Date().toISOString()} unhandled promise rejection: ${reason?.stack ?? reason}`);
 });
+process.on("uncaughtException", (error) => {
+    console.error(`[ERROR] ${new Date().toISOString()} uncaught exception: ${error?.stack ?? error}`);
+});
 
 console.log(`[BOT] ${new Date().toISOString()} memulai proses utama`);
+console.log(generateDependencyReport());
 if (!process.env.DISCORD_TOKEN) {
     console.error(`[ERROR] ${new Date().toISOString()} DISCORD_TOKEN tidak diatur`);
     process.exitCode = 1;

@@ -34,6 +34,7 @@ class FakeConnection extends EventEmitter {
 
 function createHarness({ readiness = [], allowed = true, storedTargets = [] } = {}) {
     const timers = new Map();
+    const intervals = new Map();
     const savedTargets = structuredClone(storedTargets);
     const channel = {
         id: "channel-1",
@@ -92,8 +93,6 @@ function createHarness({ readiness = [], allowed = true, storedTargets = [] } = 
     const manager = new VoiceManager(client, {
         voice,
         logger: { log() {}, warn() {}, error() {} },
-        retryDelaysMs: [10, 20, 30],
-        cooldownMs: 100,
         storage: {
             load: async () => structuredClone(savedTargets),
             save: (targets) => savedTargets.splice(0, savedTargets.length, ...structuredClone(targets))
@@ -106,13 +105,27 @@ function createHarness({ readiness = [], allowed = true, storedTargets = [] } = 
         clearTimeout: (timer) => {
             timer.cancelled = true;
             timers.delete(timer);
+        },
+        setInterval: (callback, delay) => {
+            const interval = { callback, delay, unreferenced: false, unref() { this.unreferenced = true; } };
+            intervals.set(interval, interval);
+            return interval;
+        },
+        clearInterval: (interval) => {
+            intervals.delete(interval);
         }
     });
     return {
         manager,
         channel,
         timers,
+        intervals,
+        connections,
         savedTargets,
+        setTimer: manager.setTimer,
+        clearTimer: manager.clearTimer,
+        setInterval: manager.setInterval,
+        clearInterval: manager.clearInterval,
         get joinCalls() { return joinCalls; },
         async runNextTimer() {
             const [timer] = timers.keys();
@@ -145,20 +158,58 @@ test("disconnect schedules one controlled recovery without duplicate connections
     await harness.manager.close();
 });
 
-test("failed recovery attempts use bounded backoff and eventually stop", async () => {
-    const harness = createHarness({ readiness: [false, false, false, false, false] });
+test("failed recovery retries forever with an escalating capped backoff", async () => {
+    const harness = createHarness({ readiness: Array(8).fill(false) });
+    assert.equal(harness.manager.readyTimeoutMs, 20000);
+    assert.deepEqual(harness.manager.retryDelaysMs, [2000, 5000, 10000, 30000, 60000]);
     const first = await harness.manager.setTarget("guild-1", "channel-1");
     assert.equal(first.ready, false);
     assert.equal(harness.manager.status("guild-1").state, "connecting");
     assert.equal(harness.timers.size, 1);
 
-    await harness.runNextTimer();
-    await harness.runNextTimer();
-    await harness.runNextTimer();
+    const expectedDelays = [2000, 5000, 10000, 30000, 60000, 60000, 60000];
+    for (const delay of expectedDelays) {
+        assert.equal([...harness.timers.keys()][0].delay, delay);
+        await harness.runNextTimer();
+    }
 
-    assert.equal(harness.joinCalls, 4);
-    assert.equal(harness.timers.size, 0);
-    assert.equal(harness.manager.status("guild-1").state, "failed");
+    assert.equal(harness.joinCalls, 8);
+    assert.equal(harness.timers.size, 1);
+    assert.equal([...harness.timers.keys()][0].delay, 60000);
+    assert.equal(harness.manager.status("guild-1").state, "connecting");
+    await harness.manager.close();
+});
+
+test("gateway recovery and watchdog do not create duplicate guild connections", async () => {
+    const harness = createHarness();
+    await harness.manager.setTarget("guild-1", "channel-1");
+    harness.manager.entries.get("guild-1").connection.transition("disconnected");
+
+    await Promise.all([
+        harness.manager.reconnectTargets("gateway resumed"),
+        harness.manager.reconnectTargets("gateway resumed")
+    ]);
+
+    assert.equal(harness.joinCalls, 2);
+    assert.equal(harness.connections.size, 1);
+    assert.equal(harness.manager.status("guild-1").state, "ready");
+    await harness.manager.close();
+});
+
+test("watchdog is unreferenced, reconnects restored targets, and stops on leave", async () => {
+    const harness = createHarness({ storedTargets: [{ guildId: "guild-1", channelId: "channel-1" }] });
+    await harness.manager.restoreTargets();
+    const [watchdog] = harness.intervals.keys();
+
+    assert.ok(watchdog);
+    assert.equal(watchdog.delay, 60000);
+    assert.equal(watchdog.unreferenced, true);
+    await harness.manager.checkTargets();
+
+    assert.equal(harness.joinCalls, 1);
+    assert.equal(harness.manager.status("guild-1").state, "ready");
+    await harness.manager.leave("guild-1");
+    assert.equal(harness.intervals.size, 0);
     await harness.manager.close();
 });
 
@@ -170,6 +221,7 @@ test("leave cancels pending recovery and join starts a new session", async () =>
     assert.equal(harness.timers.size, 1);
     await harness.manager.leave("guild-1");
     assert.equal(harness.timers.size, 0);
+    assert.equal(harness.intervals.size, 0);
     assert.equal(harness.manager.status("guild-1").state, "no-target");
 
     const joined = await harness.manager.setTarget("guild-1", "channel-1");
@@ -259,7 +311,9 @@ test("saved target waits for explicit /join and leave removes it from disk", asy
         logger: { log() {}, error() {} },
         storePath,
         setTimeout: harness.manager.setTimer,
-        clearTimeout: harness.manager.clearTimer
+        clearTimeout: harness.manager.clearTimer,
+        setInterval: harness.manager.setInterval,
+        clearInterval: harness.manager.clearInterval
     });
 
     try {

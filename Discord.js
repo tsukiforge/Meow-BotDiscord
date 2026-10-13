@@ -4,7 +4,8 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ActionRowBuilder,
-  Events
+  Events,
+  MessageFlags
 } = require('discord.js');
 
 const client = new Client({
@@ -140,14 +141,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const room = createRoom(interaction.user, channelId);
         await interaction.reply({
           content: `🎮 Room baru dibuat! Kode: **${room.code}**\nMasuk room dengan /game ${room.code}\nMinimal 1-6 pemain.`,
-          ephemeral: false
         });
         return;
       }
 
       const result = joinRoom(code, interaction.user, channelId);
       if (!result.ok) {
-        await interaction.reply({ content: `❌ ${result.message}`, ephemeral: true });
+        await interaction.reply({ content: `❌ ${result.message}`, flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -159,7 +159,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.reply({
         content: `✅ Kamu masuk ke room **${code}**. Total pemain: **${room.players.length}**`,
-        ephemeral: false
       });
       return;
     }
@@ -170,14 +169,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const room = createRoom(interaction.user, interaction.channelId);
       await interaction.reply({
         content: `🎮 Room dibuat! Kode: **${room.code}**\nGunakan /game ${room.code} untuk join.`,
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     }
 
     if (interaction.customId === 'join_room') {
       await interaction.reply({
         content: 'Masukkan kode room dengan `/game <kode>` di channel ini.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     }
   }
