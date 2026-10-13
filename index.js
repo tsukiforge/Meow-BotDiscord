@@ -176,6 +176,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
             });
         }
 
+        const currentStatus = voiceManager.status(guildId);
+        if (currentStatus.state === "ready" && currentStatus.channelId === currentChannel.id) {
+            return interaction.reply({
+                content: `Mmm... kamu nggak lihat Meow ya? Meow sudah di sini, di **${currentChannel.name}**~ Jangan `/join` lagi, santai saja!`,
+                ephemeral: true
+            });
+        }
+
         try {
             await interaction.reply({
                 content: "Mmm... Meow sedang masuk ke Voice Channel, tunggu sebentar ya~",
