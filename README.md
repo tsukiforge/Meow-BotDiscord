@@ -13,7 +13,7 @@ Bot Discord ringan dan sederhana untuk server kecil. Fokus utama bot ini adalah 
 - `/leave` — menghentikan koneksi dan keluar dari voice channel
 
 ## Persyaratan
-- Node.js 19.9.0
+- Node.js 18.17.0 atau lebih baru (Node.js 20/22 LTS disarankan untuk hosting)
 - Discord.js v14
 - @discordjs/voice versi yang kompatibel dengan Discord.js v14
 - Akses bot ke server dengan permission untuk join/move voice channel dan lihat guild
@@ -91,7 +91,7 @@ Mengirim pesan dengan mention user tertentu tanpa memicu mention massal. Format 
 
 ## Hosting di Wispbyte
 1. Upload project hasil clone ke environment Wispbyte.
-2. Pastikan Node.js 19.9.0 dipilih pada runtime environment.
+2. Pilih runtime Node.js 18.17.0 atau lebih baru; Node.js 20/22 LTS disarankan.
 3. Set variabel environment di Wispbyte:
    - `DISCORD_TOKEN`
    - `CLIENT_ID`
@@ -104,7 +104,20 @@ Mengirim pesan dengan mention user tertentu tanpa memicu mention massal. Format 
    ```bash
    node deploy-commands.js
    ```
-6. Gunakan `npm start` sebagai command boot utama bot.
+6. Gunakan `npm start` sebagai command boot utama bot (`node index.js`). Jangan gunakan `node deploy-commands.js` sebagai proses utama.
+7. Aktifkan opsi auto-restart/restart-on-crash di panel Wispbyte jika tersedia untuk paket/server Anda. Pastikan startup command tetap `npm start`, dan periksa console/log panel setelah crash. Ketersediaan serta nama opsi restart berbeda menurut paket dan panel Wispbyte; repository ini tidak dapat memastikan fitur itu aktif di akun Anda.
+8. Pastikan filesystem tempat bot berjalan tetap ada di antara restart dan gunakan direktori kerja project yang sama. Target disimpan di `voice-targets.json` (hanya ID guild/channel, tanpa token). Setelah server/proses menyala kembali, jalankan `/join` secara manual agar bot masuk voice; target dari file tidak membuat bot join otomatis. Jika filesystem/container bersifat ephemeral atau file dihapus saat redeploy, target tersimpan tidak tersedia.
+
+`deploy-commands.js` dijalankan satu kali secara terpisah setelah perubahan command. Proses utamanya hanya `index.js`; bot tidak membuat proses tambahan untuk menghindari batas hosting.
+
+## Voice standby dan pemulihan
+- `/join` menyimpan target channel dan menyambungkan bot atas permintaan manual. Jika proses restart, jalankan `/join` lagi; target tersimpan hanya membantu mempertahankan pilihan channel.
+- `/move` mengganti target dan mencoba koneksi atas permintaan manual; `/leave` memutus koneksi serta menghapus target tersimpan.
+- Jika koneksi voice terputus atau upaya koneksi gagal, bot tidak mencoba lagi otomatis. Jalankan `/join` atau `/move` secara manual untuk menyambungkan kembali. Channel yang tidak tersedia atau tidak memiliki izin tidak digunakan.
+- `/status` menampilkan keadaan koneksi aktual, target, dan apakah upaya manual sedang berjalan. Status proses yang benar-benar mati hanya bisa dipastikan dari panel/log hosting, bukan melalui slash command.
+- Bot tidak menjamin uptime 100%. Pemulihan bergantung pada Discord, izin bot, ketersediaan filesystem target, dan konfigurasi restart Wispbyte.
+
+Jalankan tes logika koneksi dengan `npm test`.
 
 ## Catatan
 - Bot dibuat ringan dan cocok untuk hosting gratis atau server kecil.

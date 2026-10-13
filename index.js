@@ -6,12 +6,7 @@ const {
     Events,
     ChannelType
 } = require("discord.js");
-
-const {
-    joinVoiceChannel,
-    getVoiceConnection,
-    VoiceConnectionStatus
-} = require("@discordjs/voice");
+const { VoiceManager } = require("./voice-manager");
 
 const BOT_NAME = "MeowBot";
 const DEVELOPER_NAME = "tsukiforge";
@@ -27,7 +22,7 @@ const client = new Client({
     ]
 });
 
-const activeVoiceChannels = new Map();
+const voiceManager = new VoiceManager(client);
 
 function findVoiceChannel(guild, channelName) {
     const target = String(channelName || "").trim();
@@ -42,28 +37,6 @@ function findVoiceChannel(guild, channelName) {
 
         return name === query || name.includes(query);
     }) || null;
-}
-
-function isConnectionHealthy(connection) {
-    if (!connection) return false;
-
-    return connection.state.status === VoiceConnectionStatus.Ready;
-}
-
-function getCurrentVoiceChannel(guildId) {
-    const connection = getVoiceConnection(guildId);
-
-    if (!connection || connection.state.status === VoiceConnectionStatus.Destroyed) {
-        return null;
-    }
-
-    return connection.joinConfig?.channelId ?? null;
-}
-
-function getVoiceStatusLabel(connection) {
-    if (!connection) return "NotConnected";
-
-    return connection.state.status;
 }
 
 function generateRoomCode() {
@@ -84,8 +57,43 @@ function getRoomByCode(code) {
     return gameRooms.get(normalizedCode) ?? null;
 }
 
-client.once(Events.ClientReady, (bot) => {
-    console.log(`🐱 Meow~ online sebagai ${bot.user.tag}`);
+client.once(Events.ClientReady, async (bot) => {
+    console.log(`[BOT] ${new Date().toISOString()} online sebagai ${bot.user.tag}`);
+    await voiceManager.restoreTargets();
+});
+
+client.on(Events.ShardDisconnect, (event, shardId) => {
+    console.warn(`[GATEWAY] ${new Date().toISOString()} shard ${shardId} terputus (code ${event.code})`);
+});
+client.on(Events.ShardReconnecting, (shardId) => {
+    console.warn(`[GATEWAY] ${new Date().toISOString()} shard ${shardId} mencoba tersambung kembali`);
+});
+client.on(Events.ShardResume, (shardId, replayedEvents) => {
+    console.log(`[GATEWAY] ${new Date().toISOString()} shard ${shardId} pulih; replay ${replayedEvents} event`);
+});
+client.on(Events.Error, (error) => {
+    console.error(`[ERROR] ${new Date().toISOString()} Discord client: ${error?.message ?? String(error)}`);
+});
+client.on(Events.ChannelDelete, (channel) => {
+    voiceManager.onChannelDeleted(channel).catch((error) => {
+        console.error(`[ERROR] ${new Date().toISOString()} validasi channel terhapus: ${error?.message ?? String(error)}`);
+    });
+});
+client.on(Events.ChannelUpdate, (_oldChannel, channel) => {
+    voiceManager.onChannelUpdated(channel).catch((error) => {
+        console.error(`[ERROR] ${new Date().toISOString()} validasi perubahan channel: ${error?.message ?? String(error)}`);
+    });
+});
+client.on(Events.GuildMemberUpdate, (_oldMember, member) => {
+    if (member.id !== client.user?.id) return;
+    voiceManager.onGuildMemberUpdated(member.guild.id).catch((error) => {
+        console.error(`[ERROR] ${new Date().toISOString()} validasi izin bot: ${error?.message ?? String(error)}`);
+    });
+});
+client.on(Events.GuildDelete, (guild) => {
+    voiceManager.onGuildDeleted(guild.id).catch((error) => {
+        console.error(`[ERROR] ${new Date().toISOString()} penghapusan target guild: ${error?.message ?? String(error)}`);
+    });
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -152,42 +160,19 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         try {
-            const existingConnection = getVoiceConnection(guildId);
-            if (existingConnection && isConnectionHealthy(existingConnection) && existingConnection.joinConfig.channelId === currentChannel.id) {
-                return interaction.reply(`🐱 Meow~ aku sudah berada di **${currentChannel.name}**.`);
+            await interaction.deferReply({ ephemeral: true });
+            const result = await voiceManager.setTarget(guildId, currentChannel.id);
+            if (result.invalid) {
+                await interaction.editReply("❌ Bot tidak dapat melihat atau bergabung ke channel itu. Target standby dibatalkan.");
+            } else {
+                await interaction.editReply(result.ready
+                    ? `🐱 Meow~ standby di **${currentChannel.name}**.`
+                    : `⚠️ Meow~ belum berhasil tersambung ke **${currentChannel.name}**. Target tersimpan; jalankan /join lagi untuk mencoba.`);
             }
-
-            if (existingConnection && existingConnection.state.status !== VoiceConnectionStatus.Destroyed) {
-                existingConnection.destroy();
-            }
-
-            const connection = joinVoiceChannel({
-                channelId: currentChannel.id,
-                guildId,
-                adapterCreator: interaction.guild.voiceAdapterCreator,
-                selfDeaf: true,
-                selfMute: true
-            });
-
-            activeVoiceChannels.set(guildId, {
-                channelId: currentChannel.id
-            });
-
-            if (!isConnectionHealthy(connection)) {
-                await interaction.reply({
-                    content: "⚠️ Meow~ sedang mencoba menyambungkan ke voice channel. Coba lagi sebentar.",
-                    ephemeral: true
-                });
-                return;
-            }
-
-            await interaction.reply(`🐱 Meow~ masuk ke **${currentChannel.name}**.`);
         } catch (error) {
-            console.error("❌ Join voice error:", error);
-            await interaction.reply({
-                content: "❌ Meow~ gagal masuk ke Voice Channel.",
-                ephemeral: true
-            });
+            console.error(`[ERROR] ${new Date().toISOString()} /join guild ${guildId}: ${error?.message ?? String(error)}`);
+            if (interaction.deferred) await interaction.editReply("❌ Meow~ gagal masuk ke Voice Channel.");
+            else await interaction.reply({ content: "❌ Meow~ gagal masuk ke Voice Channel.", ephemeral: true });
         }
 
         return;
@@ -205,61 +190,27 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
 
         try {
-            const existingConnection = getVoiceConnection(guildId);
-
-            if (existingConnection && isConnectionHealthy(existingConnection) && existingConnection.joinConfig.channelId === targetChannel.id) {
-                return interaction.reply(`🐱 Meow~ aku sudah ada di **${targetChannel.name}**.`);
+            await interaction.deferReply({ ephemeral: true });
+            const result = await voiceManager.setTarget(guildId, targetChannel.id);
+            if (result.invalid) {
+                await interaction.editReply("❌ Bot tidak dapat melihat atau bergabung ke channel itu. Target standby dibatalkan.");
+            } else {
+                await interaction.editReply(result.ready
+                    ? `🐱 Meow~ standby di **${targetChannel.name}**.`
+                    : `⚠️ Meow~ belum berhasil tersambung ke **${targetChannel.name}**. Target diperbarui; jalankan /move lagi untuk mencoba.`);
             }
-
-            if (existingConnection && existingConnection.state.status !== VoiceConnectionStatus.Destroyed) {
-                existingConnection.destroy();
-            }
-
-            const connection = joinVoiceChannel({
-                channelId: targetChannel.id,
-                guildId,
-                adapterCreator: targetChannel.guild.voiceAdapterCreator,
-                selfDeaf: true,
-                selfMute: true
-            });
-
-            activeVoiceChannels.set(guildId, {
-                channelId: targetChannel.id
-            });
-
-            if (!isConnectionHealthy(connection)) {
-                await interaction.reply({
-                    content: "⚠️ Meow~ sedang mencoba pindah ke voice channel. Coba lagi sebentar.",
-                    ephemeral: true
-                });
-                return;
-            }
-
-            await interaction.reply(`🐱 Meow~ pindah ke **${targetChannel.name}**.`);
-            console.log(`🔁 Move: ${targetChannel.name} (${guildId})`);
+            console.log(`[TARGET] ${new Date().toISOString()} /move: ${targetChannel.name} (${guildId})`);
         } catch (error) {
-            console.error("❌ Move voice error:", error);
-            await interaction.reply({
-                content: "❌ Meow~ gagal pindah ke channel voice.",
-                ephemeral: true
-            });
+            console.error(`[ERROR] ${new Date().toISOString()} /move guild ${guildId}: ${error?.message ?? String(error)}`);
+            if (interaction.deferred) await interaction.editReply("❌ Meow~ gagal pindah ke channel voice.");
+            else await interaction.reply({ content: "❌ Meow~ gagal pindah ke channel voice.", ephemeral: true });
         }
 
         return;
     }
 
     if (interaction.commandName === "leave") {
-        const connection = getVoiceConnection(guildId);
-        if (!connection) {
-            return interaction.reply({
-                content: "🐱 Meow~ sedang tidak berada di Voice Channel.",
-                ephemeral: true
-            });
-        }
-
-        connection.destroy();
-        activeVoiceChannels.delete(guildId);
-
+        await voiceManager.leave(guildId);
         await interaction.reply("👋 Meow~ sudah keluar dari Voice Channel.");
         return;
     }
@@ -286,17 +237,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.commandName === "status") {
-        const connection = getVoiceConnection(guildId);
-
-        if (!connection || !isConnectionHealthy(connection)) {
-            return interaction.reply("🔴 **Meow~ tidak berada di Voice Channel.**");
+        const status = voiceManager.status(guildId);
+        if (status.state === "no-target") {
+            return interaction.reply({ content: "⚪ Meow~ tidak memiliki target standby.", ephemeral: true });
         }
-
-        const channel = interaction.guild.channels.cache.get(connection.joinConfig?.channelId);
-
-        return interaction.reply(
-            `🟢 **Meow~ sedang tersambung**\n📡 Status: **${getVoiceStatusLabel(connection)}**\n🎙️ Channel: **${channel?.name ?? "Unknown"}**`
-        );
+        const channel = interaction.guild.channels.cache.get(status.channelId);
+        const label = {
+            ready: "🟢 Terhubung dan Ready",
+            connecting: "🟠 Sedang menyambung atas command manual",
+            failed: "🔴 Terputus/gagal; jalankan /join untuk menyambungkan",
+            disconnected: "🔴 Terputus"
+        }[status.state];
+        return interaction.reply({
+            content: `${label}\n📡 Status koneksi: **${status.connectionStatus}**\n🎙️ Target: **${channel?.name ?? status.channelId}**\n🛠️ Percobaan manual berjalan: **${status.connecting ? "Ya" : "Tidak"}**${status.lastError ? `\n⚠️ Keterangan: ${status.lastError}` : ""}`,
+            ephemeral: true
+        });
     }
 
     if (interaction.commandName === "game") {
@@ -372,4 +327,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+let shuttingDown = false;
+async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[BOT] ${new Date().toISOString()} menerima ${signal}; shutdown dimulai`);
+    await voiceManager.close();
+    client.destroy();
+    console.log(`[BOT] ${new Date().toISOString()} shutdown selesai`);
+}
+
+process.once("SIGINT", () => shutdown("SIGINT").catch((error) => {
+    console.error(`[ERROR] ${new Date().toISOString()} shutdown SIGINT: ${error?.message ?? String(error)}`);
+    process.exitCode = 1;
+}));
+process.once("SIGTERM", () => shutdown("SIGTERM").catch((error) => {
+    console.error(`[ERROR] ${new Date().toISOString()} shutdown SIGTERM: ${error?.message ?? String(error)}`);
+    process.exitCode = 1;
+}));
+
+console.log(`[BOT] ${new Date().toISOString()} memulai proses utama`);
+if (!process.env.DISCORD_TOKEN) {
+    console.error(`[ERROR] ${new Date().toISOString()} DISCORD_TOKEN tidak diatur`);
+    process.exitCode = 1;
+} else {
+    client.login(process.env.DISCORD_TOKEN).then(() => {
+        console.log(`[BOT] ${new Date().toISOString()} login Discord berhasil`);
+    }).catch((error) => {
+        console.error(`[ERROR] ${new Date().toISOString()} login Discord gagal: ${error?.message ?? String(error)}`);
+        process.exitCode = 1;
+    });
+}

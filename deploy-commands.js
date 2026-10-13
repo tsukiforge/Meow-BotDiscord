@@ -79,12 +79,13 @@ const commands = [
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
 (async () => {
+    let timeout;
     try {
         if (!process.env.CLIENT_ID || !process.env.GUILD_ID || !process.env.DISCORD_TOKEN) {
             throw new Error("ENV belum lengkap. Harap isi DISCORD_TOKEN, CLIENT_ID, dan GUILD_ID di .env");
         }
 
-        console.log("🔄 Mendaftarkan commands...");
+        console.log(`[DEPLOY] ${new Date().toISOString()} mendaftarkan commands`);
 
         const deployPromise = rest.put(
             Routes.applicationGuildCommands(
@@ -97,18 +98,18 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
         );
 
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => {
+            timeout = setTimeout(() => {
                 reject(new Error("Discord API timeout setelah 15 detik."));
             }, 15000);
         });
 
         const result = await Promise.race([deployPromise, timeoutPromise]);
+        clearTimeout(timeout);
 
-        console.log("📦 Hasil deploy:", result);
-        console.log("✅ Commands berhasil didaftarkan!");
+        console.log(`[DEPLOY] ${new Date().toISOString()} ${result.length} commands berhasil didaftarkan`);
     } catch (error) {
-        console.error("❌ Gagal mendaftarkan commands:");
-        console.error(error);
+        if (timeout) clearTimeout(timeout);
+        console.error(`[ERROR] ${new Date().toISOString()} deploy slash commands: ${error?.message ?? String(error)}`);
         process.exitCode = 1;
     }
 })();
