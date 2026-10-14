@@ -139,11 +139,25 @@ function registerInstallDM(client, { onGuildJoin } = {}) {
                 return;
             }
 
-            const inviter = await findInviter(client, guild);
-            await sendInstallDM(client, guild, inviter);
-
             if (typeof onGuildJoin === "function") {
-                await onGuildJoin(guild);
+                try {
+                    await onGuildJoin(guild);
+                } catch (error) {
+                    console.error(`[AUTODM] ${new Date().toISOString()} Registrasi guild ${guild?.name ?? guild?.id} gagal: ${errorMessage(error)}`);
+                }
+            }
+
+            let inviter = null;
+            try {
+                inviter = await findInviter(client, guild);
+            } catch (error) {
+                console.error(`[AUTODM] ${new Date().toISOString()} Pencarian inviter guild ${guild?.name ?? guild?.id} gagal: ${errorMessage(error)}`);
+            }
+
+            try {
+                await sendInstallDM(client, guild, inviter);
+            } catch (error) {
+                console.error(`[AUTODM] ${new Date().toISOString()} Pengiriman DM install guild ${guild?.name ?? guild?.id} gagal: ${errorMessage(error)}`);
             }
         } catch (error) {
             console.error(`[AUTODM] ${new Date().toISOString()} Gagal memproses guild baru ${guild?.name ?? guild?.id}: ${errorMessage(error)}`);

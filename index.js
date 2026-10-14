@@ -432,7 +432,9 @@ process.on("unhandledRejection", (reason) => {
 });
 process.on("uncaughtException", (error) => {
     console.error(`[ERROR] ${new Date().toISOString()} uncaught exception: ${error?.stack ?? error}`);
-    process.exit(1);
+    if (process.env.EXIT_ON_UNCAUGHT !== "false") {
+        process.exit(1);
+    }
 });
 
 console.log(`[BOT] ${new Date().toISOString()} memulai proses utama`);

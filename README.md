@@ -20,6 +20,12 @@ Bot Discord ringan dan sederhana untuk server kecil. Fokus utama bot ini adalah 
 - `@snazzah/davey` untuk dukungan protokol DAVE dan `libsodium-wrappers` untuk enkripsi pure-JavaScript
 - Akses bot ke server dengan permission untuk join/move voice channel dan lihat guild
 
+## Izin dan hosting
+- Role bot sebaiknya memiliki izin **View Audit Log** agar DM sambutan dapat dikirim ke admin yang menambahkan bot. Tanpa izin ini, penerima DM akan fallback ke owner server, lalu ke system channel jika DM tertutup.
+- Link undangan bot sebaiknya menyertakan izin **View Channels**, **Connect**, **Send Messages**, dan **View Audit Log**, serta scope `bot` dan `applications.commands`.
+- Hosting wajib memakai **Node.js >=22.12.0** dan sebaiknya menyediakan auto-restart saat proses crash. Secara default `EXIT_ON_UNCAUGHT=true`, sehingga `uncaughtException` membuat proses keluar agar hosting dapat memulihkannya. Set `EXIT_ON_UNCAUGHT=false` hanya jika hosting tidak memiliki auto-restart dan Anda memahami risikonya.
+- Jika log `[NET]` macet pada tahap **UDP handshake**, UDP kemungkinan diblokir oleh hosting. Hal tersebut tidak dapat diperbaiki dari kode dan perlu ditanyakan kepada penyedia hosting.
+
 ## Langkah install
 
 1. Clone repo
@@ -47,6 +53,7 @@ Bot Discord ringan dan sederhana untuk server kecil. Fokus utama bot ini adalah 
    DISCORD_TOKEN=your_discord_bot_token
    CLIENT_ID=your_application_id
    PERSIST_TARGETS=true
+   EXIT_ON_UNCAUGHT=true
    ```
    `PERSIST_TARGETS=false` menonaktifkan penulisan `voice-targets.json` (lihat bagian "Penyimpanan target").
 
@@ -100,6 +107,7 @@ Mengirim pesan publik di channel dengan mention user tertentu (hanya user yang d
    - `DISCORD_TOKEN`
    - `CLIENT_ID`
    - `PERSIST_TARGETS` (opsional, default `true`)
+   - `EXIT_ON_UNCAUGHT` (opsional, default `true`)
 4. Jalankan perintah install secara manual jika diperlukan:
    ```bash
    npm install
@@ -120,7 +128,7 @@ Mengirim pesan publik di channel dengan mention user tertentu (hanya user yang d
 - Jika koneksi voice terputus tanpa disengaja (termasuk bot di-disconnect manual lewat Discord), bot menunggu 5 detik apakah koneksi pulih sendiri; jika tidak, bot membuat koneksi baru dan mencoba recovery tanpa batas dengan backoff 2, 5, 10, dan 30 detik, lalu setiap 60 detik. Hanya satu recovery aktif per guild. Target hanya dihapus saat: channel benar-benar dihapus, guild mengeluarkan bot, atau user menjalankan `/leave`. Kehilangan izin View Channel/Connect sementara, error API, atau gangguan jaringan TIDAK menghapus target — bot tetap mencoba kembali sampai berhasil.
 - Watchdog setiap 60 detik memeriksa semua target tersimpan dan memulai recovery jika koneksi tidak ada atau belum `Ready`. Setelah gateway shard siap (`ShardReady`) atau resume (`ShardResume`), bot juga langsung memeriksa serta mencoba menyambungkan kembali target yang belum `Ready`.
 - `/join` saat bot sudah berada di channel yang sama (bahkan sebelum status `Ready`) akan menjawab "sudah di sini" dan tidak membongkar koneksi. Spam `/join` tidak membuat bot keluar-masuk sendiri.
-- `uncaughtException` menyebabkan proses keluar (`process.exit(1)`) agar host merestart bot dan target di-restore dari `voice-targets.json`.
+- `uncaughtException` menyebabkan proses keluar secara default agar host merestart bot dan target di-restore dari `voice-targets.json`. Set `EXIT_ON_UNCAUGHT=false` hanya jika hosting tidak punya auto-restart.
 - Set `AUTO_REJOIN_ON_START=false` untuk menunda percobaan koneksi awal setelah proses dimulai; watchdog tetap akan memeriksa target tersimpan dan dapat memulai koneksi dalam waktu paling lama sekitar 60 detik.
 - Log `[NET]` menampilkan tahap jaringan voice serta error/close code websocket. Jika log terus macet pada tahap UDP handshake, kemungkinan besar trafik UDP diblokir oleh hosting; hal ini tidak dapat diperbaiki dari kode dan perlu ditanyakan ke penyedia hosting.
 

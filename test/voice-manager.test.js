@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { ChannelType } = require("discord.js");
 const { VoiceManager, isAlreadyInChannel } = require("../voice-manager");
-const { findInviter, buildInstallMessage } = require("../autoDM/installingAppsOnServer");
+const { findInviter, buildInstallMessage, registerInstallDM } = require("../autoDM/installingAppsOnServer");
 
 class FakeConnection extends EventEmitter {
     constructor(options, ready) {
@@ -447,6 +447,79 @@ test("install DM template greets the recipient and lists every command", () => {
     for (const name of ["/join", "/help", "/ping", "/move", "/say", "/status", "/about", "/leave", "/game"]) {
         assert.ok(message.includes(name), `template should mention ${name}`);
     }
+});
+
+test("GuildCreate registers commands even when inviter lookup throws", async () => {
+    let guildCreateHandler;
+    let onGuildJoinCalls = 0;
+    let nameReads = 0;
+    const client = {
+        user: { id: "bot-1" },
+        users: { fetch: async () => null },
+        on: (event, handler) => {
+            if (event === "guildCreate") guildCreateHandler = handler;
+        }
+    };
+    const guild = {
+        id: "guild-1",
+        joinedTimestamp: Date.now(),
+        ownerId: "owner-1",
+        fetchAuditLogs: async () => ({ entries: [] }),
+        fetchOwner: async () => null,
+        get name() {
+            nameReads += 1;
+            if (nameReads === 1) throw new Error("simulated inviter lookup failure");
+            return "Server Uji";
+        },
+        systemChannel: null
+    };
+
+    registerInstallDM(client, {
+        onGuildJoin: async () => {
+            onGuildJoinCalls += 1;
+        }
+    });
+    await guildCreateHandler(guild);
+
+    assert.equal(onGuildJoinCalls, 1);
+});
+
+test("GuildCreate still attempts DM when command registration throws", async () => {
+    let guildCreateHandler;
+    let dmAttempts = 0;
+    const recipient = {
+        id: "admin-1",
+        username: "Admin",
+        send: async () => {
+            dmAttempts += 1;
+        }
+    };
+    const client = {
+        user: { id: "bot-1" },
+        users: { fetch: async () => recipient },
+        on: (event, handler) => {
+            if (event === "guildCreate") guildCreateHandler = handler;
+        }
+    };
+    const guild = {
+        id: "guild-1",
+        name: "Server Uji",
+        joinedTimestamp: Date.now(),
+        ownerId: "owner-1",
+        fetchAuditLogs: async () => ({
+            entries: [{ target: { id: "bot-1" }, createdTimestamp: Date.now(), executor: recipient }]
+        }),
+        systemChannel: null
+    };
+
+    registerInstallDM(client, {
+        onGuildJoin: async () => {
+            throw new Error("simulated command registration failure");
+        }
+    });
+    await guildCreateHandler(guild);
+
+    assert.equal(dmAttempts, 1);
 });
 
 test("startup loads saved target without making a voice connection", async () => {
