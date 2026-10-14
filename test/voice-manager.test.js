@@ -4,6 +4,7 @@ const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const vm = require("node:vm");
 const { ChannelType } = require("discord.js");
 const { VoiceManager, isAlreadyInChannel } = require("../voice-manager");
 const { findInviter, buildInstallMessage, registerInstallDM } = require("../autoDM/installingAppsOnServer");
@@ -347,6 +348,128 @@ test("isAlreadyInChannel treats a visible bot in the same channel as already the
 
     const otherChannel = { state: "ready", channelId: "channel-2" };
     assert.equal(isAlreadyInChannel(otherChannel, "channel-2", "channel-1"), false);
+});
+
+test("/join replies correctly when Meow is already in the user's voice channel", async () => {
+    let loadedClient;
+    class FakeClient {
+        constructor() {
+            this.handlers = new Map();
+            loadedClient = this;
+        }
+
+        on(event, handler) {
+            const handlers = this.handlers.get(event) ?? [];
+            handlers.push(handler);
+            this.handlers.set(event, handlers);
+            return this;
+        }
+
+        once(event, handler) {
+            return this.on(event, handler);
+        }
+
+        listeners(event) {
+            return this.handlers.get(event) ?? [];
+        }
+
+        login() {
+            return Promise.resolve();
+        }
+
+        destroy() {}
+    }
+
+    const interactionHandlerEvents = {
+        ClientReady: "ready",
+        ShardDisconnect: "shardDisconnect",
+        ShardReconnecting: "shardReconnecting",
+        ShardResume: "shardResume",
+        ShardReady: "shardReady",
+        Error: "error",
+        Warn: "warn",
+        ShardError: "shardError",
+        ChannelDelete: "channelDelete",
+        ChannelUpdate: "channelUpdate",
+        GuildMemberUpdate: "guildMemberUpdate",
+        GuildDelete: "guildDelete",
+        InteractionCreate: "interactionCreate"
+    };
+    const fakeProcess = {
+        env: {},
+        exitCode: undefined,
+        exit() {
+            throw new Error("process.exit should not be called in this test");
+        },
+        once() {},
+        on() {}
+    };
+    const fakeVoiceManager = {
+        status: () => ({ state: "ready", channelId: "voice-1" }),
+        close: async () => {}
+    };
+    const fakeDiscord = {
+        Client: FakeClient,
+        GatewayIntentBits: { Guilds: 1, GuildVoiceStates: 2 },
+        Events: interactionHandlerEvents,
+        ChannelType: { GuildVoice: "guildVoice" },
+        MessageFlags: { Ephemeral: 64 },
+        REST: class {},
+        Routes: {}
+    };
+    const sandbox = {
+        console: { log() {}, warn() {}, error() {} },
+        process: fakeProcess,
+        require(request) {
+            if (request === "discord.js") return fakeDiscord;
+            if (request === "@discordjs/voice") return { generateDependencyReport: () => "" };
+            if (request === "./voice-manager") {
+                return {
+                    VoiceManager: class {
+                        status = fakeVoiceManager.status;
+                        close = fakeVoiceManager.close;
+                    },
+                    isAlreadyInChannel: () => true
+                };
+            }
+            if (request === "./autoDM/installingAppsOnServer") return { registerInstallDM() {} };
+            if (request === "./commands") return { commands: [] };
+            if (request === "dotenv") return { config() {} };
+            throw new Error(`Unexpected require: ${request}`);
+        }
+    };
+
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, "..", "index.js"), "utf8"), sandbox, {
+        filename: "index.js"
+    });
+
+    const client = loadedClient;
+    const replies = [];
+    const currentChannel = { id: "voice-1", name: "GOSYIPPP SYANTIKK", type: "guildVoice" };
+    const member = { voice: { channel: currentChannel } };
+    const interaction = {
+        commandName: "join",
+        guildId: "guild-1",
+        user: { id: "user-1" },
+        member,
+        guild: {
+            members: {
+                me: { voice: { channelId: "voice-1" } },
+                fetch: async () => member
+            }
+        },
+        isChatInputCommand: () => true,
+        reply: async (payload) => {
+            replies.push(payload);
+        }
+    };
+
+    const handler = [...client.handlers.values()].flat().at(-1);
+    await handler(interaction);
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].content, "Mmm... kamu nggak lihat Meow ya? Meow sudah di sini, di **GOSYIPPP SYANTIKK**~ Jangan `/join` lagi, santai saja!");
+    assert.equal(replies[0].flags, 64);
 });
 
 test("PERSIST_TARGETS=false keeps voice targets in memory and writes no file", async () => {

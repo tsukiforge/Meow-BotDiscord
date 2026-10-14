@@ -212,7 +212,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         const botVoiceChannelId = interaction.guild.members.me?.voice?.channelId ?? null;
         if (isAlreadyInChannel(currentStatus, botVoiceChannelId, currentChannel.id)) {
             return interaction.reply({
-                content: `Mmm... kamu nggak lihat Meow ya? Meow sudah di sini, di **${currentChannel.name}**~ Jangan `/join` lagi, santai saja!`,
+                content: `Mmm... kamu nggak lihat Meow ya? Meow sudah di sini, di **${currentChannel.name}**~ Jangan \`/join\` lagi, santai saja!`,
                 flags: MessageFlags.Ephemeral
             });
         }
